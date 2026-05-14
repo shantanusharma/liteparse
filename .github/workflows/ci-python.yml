@@ -1,14 +1,22 @@
-name: Python Bindings
+name: CI - Python Bindings
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    paths:
+      - 'crates/**'
+      - 'packages/python/**'
+      - '.github/workflows/ci-python.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'crates/**'
+      - 'packages/python/**'
+      - '.github/workflows/ci-python.yml'
 
 env:
   CARGO_TERM_COLOR: always
+  PDFIUM_RELEASE_TAG: chromium/7827
 
 jobs:
   build:
@@ -67,7 +75,6 @@ jobs:
           manylinux: auto
           working-directory: packages/python
           before-script-linux: |
-            # Install build deps inside the manylinux container
             if command -v yum &> /dev/null; then
               yum install -y clang-devel tesseract-devel leptonica-devel || true
             elif command -v apt-get &> /dev/null; then
@@ -104,7 +111,6 @@ jobs:
         working-directory: packages/python
         shell: pwsh
         run: |
-          # Find pdfium.dll in the build cache
           $cacheBase = "$env:LOCALAPPDATA\pdfium-rs"
           if (-not (Test-Path $cacheBase)) {
             $cacheBase = "$env:USERPROFILE\.cache\pdfium-rs"
@@ -139,7 +145,6 @@ jobs:
           path: packages/python/dist/*.whl
           if-no-files-found: error
 
-  # Build source distribution
   sdist:
     runs-on: ubuntu-latest
     steps:
@@ -159,7 +164,6 @@ jobs:
           path: packages/python/dist/*.tar.gz
           if-no-files-found: error
 
-  # Test the built wheels on native platforms
   test:
     needs: build
     strategy:
@@ -248,31 +252,3 @@ jobs:
           lit --version
           lit parse demo/docs/apple-10q-q3-2025.pdf --no-ocr --max-pages 1 -q | head -5
           echo "CLI test passed"
-
-  # Publish to PyPI on version tags
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: ubuntu-latest
-    name: Publish to PyPI
-    permissions:
-      id-token: write
-
-    steps:
-      - name: Download all wheels
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-*
-          path: dist
-          merge-multiple: true
-
-      - name: Download sdist
-        uses: actions/download-artifact@v4
-        with:
-          name: sdist
-          path: dist
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/

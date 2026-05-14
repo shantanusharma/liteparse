@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  PDFIUM_RELEASE_TAG: chromium/7827
 
 jobs:
   fmt:
@@ -78,11 +79,18 @@ jobs:
             ~/.cargo/git
             ~/.cache/pdfium-rs
             ~/Library/Caches/pdfium-rs
+            ${{ runner.os == 'Windows' && format('{0}\pdfium-rs', env.LOCALAPPDATA) || '' }}
             target
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
       - run: cargo build --all-targets
       - run: cargo test --all
+
+      - name: CLI smoke test
+        if: runner.os != 'Windows'
+        run: |
+          ./target/debug/lit --version
+          ./target/debug/lit parse demo/docs/apple-10q-q3-2025.pdf --no-ocr --max-pages 1 -q | head -5
 
   # Test that docker builds
   build-docker-image:

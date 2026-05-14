@@ -1,15 +1,21 @@
-name: Node.js Bindings
+name: CI - Node Bindings
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    paths:
+      - 'crates/**'
+      - 'packages/node/**'
+      - '.github/workflows/ci-node.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'crates/**'
+      - 'packages/node/**'
+      - '.github/workflows/ci-node.yml'
 
 env:
   CARGO_TERM_COLOR: always
-  # pdfium-sys auto-downloads during build, this ensures consistent version
   PDFIUM_RELEASE_TAG: chromium/7827
 
 jobs:
@@ -64,6 +70,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/pdfium-rs
+            ~/Library/Caches/pdfium-rs
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-node-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Install dependencies
         working-directory: packages/node
         run: npm ci
@@ -82,7 +98,6 @@ jobs:
         working-directory: packages/node
         shell: pwsh
         run: |
-          # Find pdfium.dll in the build cache
           $cacheBase = "$env:LOCALAPPDATA\pdfium-rs"
           if (-not (Test-Path $cacheBase)) {
             $cacheBase = "$env:USERPROFILE\.cache\pdfium-rs"
@@ -92,12 +107,8 @@ jobs:
             Copy-Item $dll.FullName -Destination ".\pdfium.dll"
             Write-Host "Copied $($dll.FullName) -> .\pdfium.dll"
           } else {
-            # Also check for pdfium.dll.lib -> the actual DLL is in bin/
-            $dllLib = Get-ChildItem -Path $cacheBase -Recurse -Filter "pdfium.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $dllLib) {
-              Write-Error "Could not find pdfium.dll in cache"
-              exit 1
-            }
+            Write-Error "Could not find pdfium.dll in cache"
+            exit 1
           }
 
       - name: Build TypeScript
@@ -113,7 +124,6 @@ jobs:
             packages/node/${{ matrix.pdfium-dylib }}
           if-no-files-found: error
 
-  # Test the built binaries on their native platforms
   test:
     needs: build
     strategy:
@@ -162,115 +172,3 @@ jobs:
               console.log('Native module loaded successfully');
             });
           "
-
-  # Publish to npm on version tags
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: ubuntu-latest
-    name: Publish to npm
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
-
-      - name: Install dependencies
-        working-directory: packages/node
-        run: npm ci
-
-      - name: Build TypeScript
-        working-directory: packages/node
-        run: npx tsc
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Prepare platform packages
-        working-directory: packages/node
-        run: |
-          # Create and publish platform-specific packages
-          declare -A PLATFORMS=(
-            ["darwin-arm64"]="aarch64-apple-darwin"
-            ["darwin-x64"]="x86_64-apple-darwin"
-            ["linux-x64-gnu"]="x86_64-unknown-linux-gnu"
-            ["linux-arm64-gnu"]="aarch64-unknown-linux-gnu"
-            ["win32-x64-msvc"]="x86_64-pc-windows-msvc"
-          )
-
-          for ARCH in "${!PLATFORMS[@]}"; do
-            PKG_NAME="@llamaindex/liteparse-${ARCH}"
-            PKG_DIR="npm/${ARCH}"
-            ARTIFACT_DIR="../../artifacts/bindings-${ARCH}"
-
-            if [ ! -d "$ARTIFACT_DIR" ]; then
-              echo "Skipping ${ARCH} - no artifacts found"
-              continue
-            fi
-
-            mkdir -p "$PKG_DIR"
-
-            # Copy native files
-            cp "$ARTIFACT_DIR"/*.node "$PKG_DIR/" 2>/dev/null || true
-            cp "$ARTIFACT_DIR"/*.dylib "$PKG_DIR/" 2>/dev/null || true
-            cp "$ARTIFACT_DIR"/*.so "$PKG_DIR/" 2>/dev/null || true
-            cp "$ARTIFACT_DIR"/*.dll "$PKG_DIR/" 2>/dev/null || true
-
-            # Determine OS and CPU for package.json
-            case "$ARCH" in
-              darwin-arm64)  OS="darwin"; CPU="arm64" ;;
-              darwin-x64)    OS="darwin"; CPU="x64" ;;
-              linux-x64-gnu) OS="linux";  CPU="x64" ;;
-              linux-arm64-gnu) OS="linux"; CPU="arm64" ;;
-              win32-x64-msvc) OS="win32"; CPU="x64" ;;
-            esac
-
-            VERSION=$(node -p "require('./package.json').version")
-
-            cat > "$PKG_DIR/package.json" << PKGJSON
-          {
-            "name": "${PKG_NAME}",
-            "version": "${VERSION}",
-            "os": ["${OS}"],
-            "cpu": ["${CPU}"],
-            "main": "liteparse.${ARCH}.node",
-            "files": ["*.node", "*.dylib", "*.so", "*.dll"],
-            "license": "Apache-2.0",
-            "repository": {
-              "type": "git",
-              "url": "https://github.com/run-llama/liteparse.git"
-            }
-          }
-          PKGJSON
-
-            echo "Created platform package: ${PKG_NAME}"
-            ls -la "$PKG_DIR/"
-          done
-
-      - name: Publish platform packages
-        working-directory: packages/node
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          for dir in npm/*/; do
-            if [ -f "$dir/package.json" ]; then
-              echo "Publishing $(node -p "require('./${dir}/package.json').name")..."
-              cd "$dir"
-              npm publish --access public --provenance || true
-              cd ../../
-            fi
-          done
-
-      - name: Publish main package
-        working-directory: packages/node
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
