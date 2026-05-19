@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const PDFIUM_RELEASE_TAG: &str = "chromium/7841";
+const PDFIUM_RELEASE_TAG: &str = "chromium/7846";
 const PDFIUM_RELEASE_URL: &str = "https://github.com/run-llama/pdfium-binaries/releases/download";
 
 fn main() {
@@ -31,7 +31,17 @@ fn main() {
         // For wasm targets, pdfium is shipped as a static archive (libpdfium.a)
         // and linked statically into the final .wasm module. There is no
         // dynamic loading and no need to copy any shared library.
+        //
+        // The WASI sysroot libraries (libc, libc++, libc++abi, etc.) must also
+        // be linked so that all C/C++ runtime symbols are resolved. Without
+        // them, those symbols appear as unresolved "env::" imports in the
+        // browser, making the .wasm unusable.
         println!("cargo:rustc-link-lib=static=pdfium");
+        println!("cargo:rustc-link-lib=static=c");
+        println!("cargo:rustc-link-lib=static=c++");
+        println!("cargo:rustc-link-lib=static=c++abi");
+        println!("cargo:rustc-link-lib=static=wasi-emulated-mman");
+        println!("cargo:rustc-link-lib=static=wasi-emulated-signal");
         println!("cargo:lib_path={}", lib_dir.display());
     } else {
         // On Windows MSVC the import library is named `pdfium.dll.lib`, so
@@ -137,7 +147,7 @@ fn pdfium_asset_stem() -> &'static str {
         "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "pdfium-win-x64",
         "aarch64-pc-windows-msvc" => "pdfium-win-arm64",
         "i686-pc-windows-msvc" | "i686-pc-windows-gnu" => "pdfium-win-x86",
-        "wasm32-unknown-unknown" | "wasm32-wasip1" => "pdfium-wasm",
+        "wasm32-unknown-unknown" | "wasm32-wasip1" => "pdfium-wasi-wasm",
         other => panic!("unsupported target for pdfium auto-download: {other}"),
     }
 }

@@ -5,6 +5,8 @@
 //!   - `LiteParse` class with `new(config)`, `parse(Uint8Array)`
 //!   - JS-side OCR callback bridge (any object with an async `recognize` method)
 
+mod wasi_stubs;
+
 use std::pin::Pin;
 
 use js_sys::{Function, Reflect, Uint8Array};

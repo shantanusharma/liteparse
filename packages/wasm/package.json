@@ -19,9 +19,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "wasm-pack build ../../crates/liteparse-wasm --release --target web --out-dir ../../packages/wasm/pkg --out-name liteparse_wasm",
-    "build:bundler": "wasm-pack build ../../crates/liteparse-wasm --release --target bundler --out-dir ../../packages/wasm/pkg --out-name liteparse_wasm",
-    "build:nodejs": "wasm-pack build ../../crates/liteparse-wasm --release --target nodejs --out-dir ../../packages/wasm/pkg --out-name liteparse_wasm",
+    "build": "wasm-pack build ../../crates/liteparse-wasm --release --target web --out-dir ../../packages/wasm/pkg --out-name liteparse_wasm && node scripts/patch-wasi-imports.js",
+    "build:bundler": "wasm-pack build ../../crates/liteparse-wasm --release --target bundler --out-dir ../../packages/wasm/pkg --out-name liteparse_wasm && node scripts/patch-wasi-imports.js",
+    "build:nodejs": "wasm-pack build ../../crates/liteparse-wasm --release --target nodejs --out-dir ../../packages/wasm/pkg --out-name liteparse_wasm && node scripts/patch-wasi-imports.js",
     "clean": "rm -rf pkg",
     "prepublishOnly": "npm run build"
   },
