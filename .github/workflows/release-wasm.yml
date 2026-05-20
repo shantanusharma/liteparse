@@ -7,6 +7,10 @@ on:
         description: 'Version to release (e.g. 2.1.0)'
         required: true
         type: string
+      beta:
+        description: 'Publish as beta (npm tag: beta instead of latest)'
+        type: boolean
+        default: false
       dry-run:
         description: 'Dry run (build but do not publish)'
         type: boolean
@@ -102,7 +106,8 @@ jobs:
         working-directory: packages/wasm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+          NPM_TAG: ${{ inputs.beta && 'beta' || 'latest' }}
+        run: npm publish --access public --provenance --tag "$NPM_TAG"
 
       - name: Create git tag
         if: ${{ !inputs.dry-run }}

@@ -7,6 +7,10 @@ on:
         description: 'Version to release (e.g. 2.1.0)'
         required: true
         type: string
+      beta:
+        description: 'Publish as beta (npm tag: beta instead of latest)'
+        type: boolean
+        default: false
       dry-run:
         description: 'Dry run (build but do not publish)'
         type: boolean
@@ -352,12 +356,13 @@ jobs:
         working-directory: packages/node
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ inputs.beta && 'beta' || 'latest' }}
         run: |
           for dir in npm/*/; do
             if [ -f "$dir/package.json" ]; then
               echo "Publishing $(node -p "require('./${dir}/package.json').name")..."
               cd "$dir"
-              npm publish --access public --provenance || true
+              npm publish --access public --provenance --tag "$NPM_TAG" || true
               cd ../../
             fi
           done
@@ -367,7 +372,8 @@ jobs:
         working-directory: packages/node
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+          NPM_TAG: ${{ inputs.beta && 'beta' || 'latest' }}
+        run: npm publish --access public --provenance --tag "$NPM_TAG"
 
       - name: Create git tag
         if: ${{ !inputs.dry-run }}
