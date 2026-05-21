@@ -4,15 +4,15 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/**'
-      - 'packages/node/**'
-      - '.github/workflows/ci-node.yml'
+      - "crates/**"
+      - "packages/node/**"
+      - ".github/workflows/ci-node.yml"
   pull_request:
     branches: [main]
     paths:
-      - 'crates/**'
-      - 'packages/node/**'
-      - '.github/workflows/ci-node.yml'
+      - "crates/**"
+      - "packages/node/**"
+      - ".github/workflows/ci-node.yml"
 
 env:
   CARGO_TERM_COLOR: always
@@ -80,7 +80,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: packages/node
-        run: npm ci
+        run: npm install --ignore-scripts
 
       - name: Build native module
         working-directory: packages/node
@@ -147,7 +147,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: packages/node
-        run: npm ci
+        run: npm install --ignore-scripts
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
