@@ -58,18 +58,7 @@ impl LiteParse {
     /// [`LiteParse::parse_input`] with [`PdfInput::Bytes`] instead.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn parse(&self, input: &str) -> Result<ParseResult, LiteParseError> {
-        // Resolve file path to a PdfInput (convert non-PDFs first)
-        let _tmp_dir;
-        let pdf_input = if conversion::is_pdf(input) {
-            PdfInput::Path(input.to_string())
-        } else {
-            let (converted, tmp_dir) =
-                conversion::convert_to_pdf(input, self.config.password.as_deref(), false).await?;
-            _tmp_dir = tmp_dir;
-            PdfInput::Path(converted.pdf_path)
-        };
-
-        self.parse_input(pdf_input).await
+        self.parse_input(PdfInput::Path(input.to_string())).await
     }
 
     /// Parse a document from either a file path or raw bytes.
@@ -86,7 +75,10 @@ impl LiteParse {
         let t0 = web_time::Instant::now();
 
         let mut is_converted = false;
+        #[cfg(not(target_arch = "wasm32"))]
         let _tmp_dir: Option<tempfile::TempDir>;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _conv_tmp_dir: Option<tempfile::TempDir>;
 
         let validated_input = {
             #[cfg(target_arch = "wasm32")]
@@ -96,7 +88,22 @@ impl LiteParse {
 
             #[cfg(not(target_arch = "wasm32"))]
             match input {
-                PdfInput::Path(p) => PdfInput::Path(p),
+                PdfInput::Path(p) => {
+                    if conversion::is_pdf(&p) {
+                        PdfInput::Path(p)
+                    } else {
+                        let (converted, tmp_dir) = conversion::convert_to_pdf(
+                            &p,
+                            self.config.password.as_deref(),
+                            false,
+                        )
+                        .await?;
+                        _conv_tmp_dir = tmp_dir;
+                        // The on-disk source isn't ours to delete; only the
+                        // converted temp file should be cleaned up by `tmp_dir`.
+                        PdfInput::Path(converted.pdf_path)
+                    }
+                }
                 PdfInput::Bytes(b) => {
                     let (converted, tmp_dir) =
                         convert_data_to_pdf(b, self.config.password.as_deref()).await?;
