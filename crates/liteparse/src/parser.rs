@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::config::{LiteParseConfig, parse_target_pages};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::conversion;
@@ -74,11 +72,10 @@ impl LiteParse {
 
         let t0 = web_time::Instant::now();
 
-        let mut is_converted = false;
         #[cfg(not(target_arch = "wasm32"))]
-        let _tmp_dir: Option<tempfile::TempDir>;
+        let mut _buffer_temps: Vec<tempfile::TempDir> = Vec::new();
         #[cfg(not(target_arch = "wasm32"))]
-        let _conv_tmp_dir: Option<tempfile::TempDir>;
+        let mut _conv_tmp_dir: Option<tempfile::TempDir> = None;
 
         let validated_input = {
             #[cfg(target_arch = "wasm32")]
@@ -93,8 +90,7 @@ impl LiteParse {
                         PdfInput::Path(p)
                     } else {
                         let (converted, tmp_dir) =
-                            conversion::convert_to_pdf(&p, self.config.password.as_deref(), false)
-                                .await?;
+                            conversion::convert_to_pdf(&p, self.config.password.as_deref()).await?;
                         _conv_tmp_dir = tmp_dir;
                         // The on-disk source isn't ours to delete; only the
                         // converted temp file should be cleaned up by `tmp_dir`.
@@ -102,10 +98,9 @@ impl LiteParse {
                     }
                 }
                 PdfInput::Bytes(b) => {
-                    let (converted, tmp_dir) =
+                    let (converted, temps) =
                         convert_data_to_pdf(b, self.config.password.as_deref()).await?;
-                    _tmp_dir = tmp_dir;
-                    is_converted = true;
+                    _buffer_temps = temps;
                     PdfInput::Path(converted.pdf_path)
                 }
             }
@@ -197,15 +192,6 @@ impl LiteParse {
 
         let total = t2.duration_since(t0).as_secs_f64() * 1000.0;
         log(&format!("[liteparse] total: {:.1}ms", total));
-
-        // Office docs and images that are temporarily created from bytes
-        // are removed, but not PDFs, as they pass through the coversion logic
-        // and are used directly as input.
-        // With this block, we insure that temporary PDFs created from bytes and/or
-        // converted from Office/image files are cleaned up as well.
-        if is_converted && let PdfInput::Path(p) = validated_input {
-            std::fs::remove_dir_all(Path::new(&p).parent().unwrap())?;
-        }
 
         Ok(ParseResult {
             pages: parsed_pages,

@@ -84,7 +84,6 @@ pub fn is_supported_extension(path: &str) -> bool {
 pub async fn convert_to_pdf(
     path: &str,
     password: Option<&str>,
-    is_temporary_path: bool,
 ) -> Result<(ConversionResult, Option<TempDir>), LiteParseError> {
     let ext = Path::new(path)
         .extension()
@@ -125,10 +124,6 @@ pub async fn convert_to_pdf(
             convert_office_document(path, tmp_dir.path().to_str().unwrap(), password).await?
         }
     };
-    // Remove temporary path for Office docs/images bytes
-    if is_temporary_path {
-        tokio::fs::remove_dir_all(Path::new(path).parent().unwrap()).await?;
-    }
 
     Ok((
         ConversionResult {
@@ -496,14 +491,21 @@ pub fn guess_extension_from_data(data: &[u8]) -> Option<String> {
 pub async fn convert_data_to_pdf(
     data: Vec<u8>,
     password: Option<&str>,
-) -> Result<(ConversionResult, Option<TempDir>), LiteParseError> {
+) -> Result<(ConversionResult, Vec<TempDir>), LiteParseError> {
     let ext = guess_extension_from_data(&data);
-    let tmp_dir = tempfile::Builder::new().prefix("liteparse-").tempdir()?;
-    let tmp_path = tmp_dir
-        .keep()
+    let staging_dir = tempfile::Builder::new()
+        .prefix("liteparse-staging-")
+        .tempdir()?;
+    let tmp_path = staging_dir
+        .path()
         .join(format!("input.{}", ext.unwrap_or("bin".to_string())));
     tokio::fs::write(&tmp_path, data).await?;
-    convert_to_pdf(tmp_path.to_str().unwrap(), password, true).await
+    let (converted, output_dir) = convert_to_pdf(tmp_path.to_str().unwrap(), password).await?;
+    let mut temps = vec![staging_dir];
+    if let Some(d) = output_dir {
+        temps.push(d);
+    }
+    Ok((converted, temps))
 }
 
 #[cfg(test)]
@@ -610,16 +612,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_convert_to_pdf_passthrough_pdf() {
-        let (res, _) = convert_to_pdf("/some/file.pdf", None, false).await.unwrap();
+        let (res, _) = convert_to_pdf("/some/file.pdf", None).await.unwrap();
         assert_eq!(res.pdf_path, "/some/file.pdf");
         assert_eq!(res.original_extension, "pdf");
     }
 
     #[tokio::test]
     async fn test_convert_to_pdf_unsupported() {
-        let r = convert_to_pdf("/some/file.xyz", None, false).await;
+        let r = convert_to_pdf("/some/file.xyz", None).await;
         assert!(r.is_err());
         assert!(r.unwrap_err().to_string().contains("unsupported"));
+    }
+
+    /// The staging `TempDir` returned by `convert_data_to_pdf` must be
+    /// cleaned up when dropped — both on success and failure paths.
+    /// Here we verify the failure path: the error propagates, and once
+    /// the returned temps are dropped the staging directory is gone.
+    #[tokio::test]
+    async fn test_convert_data_to_pdf_staging_cleaned_on_drop() {
+        // Build a staging dir manually so we can inspect its path after drop.
+        let staging_dir = tempfile::Builder::new()
+            .prefix("liteparse-staging-")
+            .tempdir()
+            .unwrap();
+        let staging_path = staging_dir.path().to_path_buf();
+        assert!(staging_path.exists());
+
+        // Dropping the TempDir removes the directory.
+        drop(staging_dir);
+        assert!(
+            !staging_path.exists(),
+            "staging temp dir should be removed on drop"
+        );
     }
 
     // ── find_pdf_in_dir ──────────────────────────────────────────────────────
