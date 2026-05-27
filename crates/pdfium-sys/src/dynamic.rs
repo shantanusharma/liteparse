@@ -296,17 +296,31 @@ fn search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let name = dylib_name();
 
-    // 1. Runtime env var override
+    // 1. Runtime env var override (directory containing the shared library)
     if let Ok(dir) = std::env::var("PDFIUM_LIB_PATH") {
         paths.push(PathBuf::from(&dir).join(name));
     }
 
     // 2. Compile-time baked path from build.rs
     if !PDFIUM_LIB_DIR.is_empty() {
-        paths.push(PathBuf::from(PDFIUM_LIB_DIR).join(name));
+        let lib_dir = PathBuf::from(PDFIUM_LIB_DIR);
+        paths.push(lib_dir.join(name));
+
+        // On Windows, pdfium-binaries puts the DLL in bin/, not lib/
+        #[cfg(target_os = "windows")]
+        if let Some(parent) = lib_dir.parent() {
+            paths.push(parent.join("bin").join(name));
+        }
     }
 
-    // 3. Bare library name (system search paths / LD_LIBRARY_PATH / DYLD_LIBRARY_PATH)
+    // 3. Next to the current executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            paths.push(exe_dir.join(name));
+        }
+    }
+
+    // 4. Bare library name (system search paths / LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH)
     paths.push(PathBuf::from(name));
 
     paths
