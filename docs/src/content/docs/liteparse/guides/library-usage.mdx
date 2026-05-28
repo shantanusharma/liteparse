@@ -183,8 +183,181 @@ for s in screenshots:
 </TabItem>
 <TabItem label="Rust" value="rust">
 
+## Rust usage
+
+Add `liteparse` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+liteparse = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+### Parsing a document
+
+```rust
+use liteparse::{LiteParse, LiteParseConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = LiteParse::new(LiteParseConfig::default());
+    let result = parser.parse("document.pdf").await?;
+
+    // Full document text
+    println!("{}", result.text);
+
+    // Per-page data
+    for page in &result.pages {
+        println!("Page {}: {} text items", page.page_number, page.text_items.len());
+    }
+    Ok(())
+}
+```
+
+### Parsing from bytes
+
+Use `PdfInput::Bytes` when you have the PDF in memory:
+
+```rust
+use liteparse::{LiteParse, LiteParseConfig};
+use liteparse::types::PdfInput;
+
+let parser = LiteParse::new(LiteParseConfig::default());
+let pdf_bytes = std::fs::read("document.pdf")?;
+let result = parser.parse_input(PdfInput::Bytes(pdf_bytes)).await?;
+```
+
+### Configuration
+
+Override only the fields you need:
+
+```rust
+use liteparse::{LiteParse, LiteParseConfig, OutputFormat};
+
+let config = LiteParseConfig {
+    ocr_enabled: true,
+    ocr_language: "fra".to_string(),
+    dpi: 300.0,
+    target_pages: Some("1-10".to_string()),
+    output_format: OutputFormat::Json,
+    password: Some("secret".to_string()),
+    ..Default::default()
+};
+let parser = LiteParse::new(config);
+```
+
+### Screenshots
+
+Generate page images as PNG bytes:
+
+```rust
+let parser = LiteParse::new(LiteParseConfig::default());
+let screenshots = parser.screenshot("document.pdf", None).await?;
+
+for shot in &screenshots {
+    println!("Page {}: {}x{}", shot.page_num, shot.width, shot.height);
+    // shot.image_bytes contains the raw PNG data
+}
+
+// Screenshot specific pages
+let shots = parser.screenshot("document.pdf", Some(vec![1, 2, 3])).await?;
+```
+
+### Custom OCR engine
+
+Implement the `OcrEngine` trait to plug in your own OCR backend:
+
+```rust
+use liteparse::LiteParse;
+use liteparse::ocr::OcrEngine;
+use std::sync::Arc;
+
+let parser = LiteParse::new(Default::default())
+    .with_ocr_engine(Arc::new(my_engine));
+```
+
+### Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `tesseract` | Yes | Built-in Tesseract OCR via `tesseract-rs`. Disable with `default-features = false` if you only use HTTP OCR or no OCR. |
+
 </TabItem>
 <TabItem label="Browser (WASM)" value="wasm">
+
+## Browser (WASM) usage
+
+Install the WASM package:
+
+```bash
+npm install @llamaindex/liteparse-wasm
+```
+
+### Parsing a document
+
+```typescript
+import init, { LiteParse } from "@llamaindex/liteparse-wasm";
+
+// Initialize the WASM module (required once before use)
+await init();
+
+const parser = new LiteParse({ ocrEnabled: false });
+
+// Pass a Uint8Array (e.g. from fetch, File input, or drag-drop)
+const bytes = new Uint8Array(await file.arrayBuffer());
+const result = await parser.parse(bytes);
+
+console.log(result.text);          // full document text
+console.log(result.pages[0]);      // per-page items with bboxes
+```
+
+### Configuration
+
+All options are optional and use camelCase:
+
+```typescript
+const parser = new LiteParse({
+  ocrEnabled: true,
+  ocrLanguage: "fra",
+  dpi: 300,
+  outputFormat: "json",
+  targetPages: "1-10",
+  maxPages: 100,
+  password: "secret",
+  quiet: false,
+});
+```
+
+### OCR in the browser
+
+The native Tesseract and HTTP OCR backends are not available in the browser. To use OCR, provide a JS-side engine with a `recognize` method:
+
+```typescript
+const parser = new LiteParse({
+  ocrEnabled: true,
+  ocrLanguage: "eng",
+  ocrEngine: {
+    /**
+     * @param imageData - PNG-encoded image bytes
+     * @param width     - rendered page width in pixels
+     * @param height    - rendered page height in pixels
+     * @param language  - e.g. "eng"
+     * @returns array of recognized text regions
+     */
+    async recognize(imageData, width, height, language) {
+      // e.g. call tesseract.js in a worker, or a remote OCR service
+      return [
+        { text: "Hello", bbox: [10, 20, 80, 40], confidence: 0.98 },
+      ];
+    },
+  },
+});
+```
+
+### Notes
+
+- Input must be a `Uint8Array` — file paths are not supported in the browser.
+- The WASM module must be initialized with `await init()` before creating a `LiteParse` instance.
 
 </TabItem>
 </Tabs>
