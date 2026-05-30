@@ -41,12 +41,6 @@ fn main() {
         println!("cargo:rustc-link-lib=static=c++abi");
         println!("cargo:rustc-link-lib=static=wasi-emulated-mman");
         println!("cargo:rustc-link-lib=static=wasi-emulated-signal");
-        // pdfium's bundled libjpeg/freetype reference `__c_longjmp` (an LLVM
-        // Wasm SjLj tag symbol) which isn't defined in the archives we ship.
-        // Pre-1.96 rustc passed `--allow-undefined` to wasm-ld by default,
-        // which turned these into wasm imports; 1.96 stopped, so we restore
-        // the prior behavior here until pdfium-binaries provides the symbol.
-        println!("cargo:rustc-link-arg=--allow-undefined");
         println!("cargo:lib_path={}", lib_dir.display());
     } else {
         // Non-wasm: pdfium is loaded at runtime via libloading (no link-time
