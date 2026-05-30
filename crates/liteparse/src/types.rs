@@ -103,6 +103,11 @@ pub struct ProjectedTextItem {
     pub is_margin_line_number: bool,
     pub rotated: bool,
     pub d: f32,
+    pub orig_x: f32,
+    pub orig_y: f32,
+    pub orig_width: f32,
+    pub orig_height: f32,
+    pub orig_rotation: f32,
 }
 
 #[doc(hidden)]

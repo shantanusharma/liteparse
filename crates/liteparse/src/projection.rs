@@ -2641,6 +2641,11 @@ pub fn project_pages_to_grid(pages: Vec<Page>) -> Vec<ParsedPage> {
                 .text_items
                 .iter()
                 .map(|item| ProjectedTextItem {
+                    orig_x: item.x,
+                    orig_y: item.y,
+                    orig_width: item.width,
+                    orig_height: item.height,
+                    orig_rotation: item.rotation,
                     item: item.clone(),
                     snap: Snap::Left,
                     anchor: Anchor::Left,
@@ -2660,7 +2665,17 @@ pub fn project_pages_to_grid(pages: Vec<Page>) -> Vec<ParsedPage> {
                 page_width: page.page_width,
                 page_height: page.page_height,
                 text,
-                text_items: projected_items.into_iter().map(|proj| proj.item).collect(),
+                text_items: projected_items
+                    .into_iter()
+                    .map(|proj| TextItem {
+                        x: proj.orig_x,
+                        y: proj.orig_y,
+                        width: proj.orig_width,
+                        height: proj.orig_height,
+                        rotation: proj.orig_rotation,
+                        ..proj.item
+                    })
+                    .collect(),
             }
         })
         .collect()
@@ -2689,6 +2704,11 @@ mod tests {
             is_margin_line_number: false,
             rotated: false,
             d: 0.0,
+            orig_x: 10.0,
+            orig_y: y,
+            orig_width: width,
+            orig_height: height,
+            orig_rotation: 0.0,
         }
     }
 
