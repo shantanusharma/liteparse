@@ -73,24 +73,8 @@ pub(crate) fn render_pages_for_ocr(
         if !needs_ocr {
             let path_bounds = page_obj.filled_path_bounds(3.0, 0.9);
             let uncovered = uncovered_path_area(&path_bounds, &page.text_items);
+
             needs_ocr = uncovered >= UNCOVERED_VECTOR_AREA_THRESHOLD;
-            if std::env::var("LITEPARSE_DEBUG").is_ok() {
-                eprintln!(
-                    "[ocr-debug] page {}: {} filled paths, uncovered area {:.0} -> vector trigger {}",
-                    page.page_number,
-                    path_bounds.len(),
-                    uncovered,
-                    needs_ocr
-                );
-                if needs_ocr {
-                    for p in &path_bounds {
-                        eprintln!(
-                            "[ocr-debug]   path x={:.0} y={:.0} w={:.0} h={:.0}",
-                            p.x, p.y, p.width, p.height
-                        );
-                    }
-                }
-            }
         }
 
         if !needs_ocr {
