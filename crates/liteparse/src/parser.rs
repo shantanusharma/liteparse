@@ -137,6 +137,8 @@ impl LiteParse {
                 target_pages.as_deref(),
                 self.config.max_pages,
                 render_images,
+                self.config.extract_links
+                    && self.config.output_format == crate::config::OutputFormat::Markdown,
             )?;
             let t_extract = web_time::Instant::now();
             log(&format!(

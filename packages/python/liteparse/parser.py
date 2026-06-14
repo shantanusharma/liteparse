@@ -88,6 +88,7 @@ class LiteParse:
         quiet: Optional[bool] = None,
         num_workers: Optional[int] = None,
         image_mode: Optional[str] = None,
+        extract_links: Optional[bool] = None,
     ):
         """
         Initialize LiteParse parser.
@@ -105,6 +106,8 @@ class LiteParse:
             password: Password for encrypted/protected documents
             quiet: Suppress progress output
             num_workers: Number of concurrent OCR workers (default: CPU cores - 1)
+            extract_links: Render hyperlink annotations as ``[text](url)`` in
+                markdown output (default: True). Set False for plain anchor text.
         """
         kwargs = {}
         if ocr_enabled is not None:
@@ -133,6 +136,8 @@ class LiteParse:
             kwargs["num_workers"] = num_workers
         if image_mode is not None:
             kwargs["image_mode"] = image_mode
+        if extract_links is not None:
+            kwargs["extract_links"] = extract_links
 
         self._native = _NativeLiteParse(**kwargs)
 

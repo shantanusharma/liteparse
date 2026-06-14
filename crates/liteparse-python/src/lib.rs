@@ -327,6 +327,7 @@ impl LiteParse {
         quiet = None,
         num_workers = None,
         image_mode = None,
+        extract_links = None,
     ))]
     fn new(
         ocr_language: Option<String>,
@@ -342,6 +343,7 @@ impl LiteParse {
         quiet: Option<bool>,
         num_workers: Option<usize>,
         image_mode: Option<String>,
+        extract_links: Option<bool>,
     ) -> PyResult<Self> {
         let mut cfg = LiteParseConfig::default();
         if let Some(v) = ocr_language {
@@ -390,6 +392,9 @@ impl LiteParse {
                 "embed" => ImageMode::Embed,
                 _ => ImageMode::Placeholder,
             };
+        }
+        if let Some(v) = extract_links {
+            cfg.extract_links = v;
         }
 
         let inner = liteparse::parser::LiteParse::new(cfg.clone());

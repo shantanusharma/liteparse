@@ -51,6 +51,16 @@ pub struct PathObject {
     pub segments: Vec<PathSegment>,
 }
 
+/// A URI hyperlink annotation on a page. `rect` is in viewport space
+/// (top-left origin, 72 DPI), matching `TextItem` coordinates so the URI can
+/// be assigned to overlapping text. Only external URI links are represented;
+/// internal GoTo/named destinations are excluded.
+#[derive(Debug, Clone)]
+pub struct PdfLink {
+    pub rect: RectF,
+    pub uri: String,
+}
+
 /// A loaded page within a [`Document`].
 ///
 /// The `'doc` lifetime ties the page to its owning document; `'lib` carries
@@ -346,6 +356,121 @@ impl<'doc, 'lib: 'doc> Page<'doc, 'lib> {
         }
         out
     }
+
+    /// Enumerate URI hyperlink annotations on this page. Each link's clickable
+    /// rectangle is mapped into viewport space (matching `TextItem`); the URI
+    /// is read from the link's URI action. Annotations whose action is not a
+    /// URI (internal GoTo / named destinations) are skipped.
+    pub fn links(&self, view_box: &RectF) -> Vec<PdfLink> {
+        let mut out = Vec::new();
+        let mut start_pos: std::os::raw::c_int = 0;
+        let mut link_annot: pdfium_sys::FPDF_LINK = std::ptr::null_mut();
+        loop {
+            let ok = unsafe {
+                ffi!(FPDFLink_Enumerate(
+                    self.handle,
+                    &mut start_pos,
+                    &mut link_annot
+                ))
+            };
+            if ok == 0 {
+                break;
+            }
+            if link_annot.is_null() {
+                continue;
+            }
+            let action = unsafe { ffi!(FPDFLink_GetAction(link_annot)) };
+            if action.is_null() {
+                continue;
+            }
+            let Some(uri) = read_uri_path(self.doc_handle, action) else {
+                continue;
+            };
+
+            // Prefer per-line quad points: a link that wraps across lines has
+            // one quad per line, each tight around the anchor text. The single
+            // annotation rect is their *union* — a tall box that would swallow
+            // the unlinked words sitting between the lines. Fall back to the
+            // annot rect only when no quads are present.
+            let quad_count = unsafe { ffi!(FPDFLink_CountQuadPoints(link_annot)) };
+            let mut emitted = false;
+            for q in 0..quad_count {
+                let mut quad = pdfium_sys::FS_QUADPOINTSF::default();
+                let ok = unsafe { ffi!(FPDFLink_GetQuadPoints(link_annot, q, &mut quad)) };
+                if ok == 0 {
+                    continue;
+                }
+                let page_bounds = RectF {
+                    left: quad.x1.min(quad.x2).min(quad.x3).min(quad.x4),
+                    bottom: quad.y1.min(quad.y2).min(quad.y3).min(quad.y4),
+                    right: quad.x1.max(quad.x2).max(quad.x3).max(quad.x4),
+                    top: quad.y1.max(quad.y2).max(quad.y3).max(quad.y4),
+                };
+                out.push(PdfLink {
+                    rect: self.bounds_to_viewport(view_box, &page_bounds),
+                    uri: uri.clone(),
+                });
+                emitted = true;
+            }
+            if emitted {
+                continue;
+            }
+
+            let mut rect = pdfium_sys::FS_RECTF {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+            };
+            let got = unsafe { ffi!(FPDFLink_GetAnnotRect(link_annot, &mut rect)) };
+            if got == 0 {
+                continue;
+            }
+            let page_bounds = RectF {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            };
+            out.push(PdfLink {
+                rect: self.bounds_to_viewport(view_box, &page_bounds),
+                uri,
+            });
+        }
+        out
+    }
+}
+
+/// Read a link action's URI path. PDFium returns the URI as a NUL-terminated
+/// 7-bit-ASCII byte string; the two-call protocol queries the length first.
+/// Returns `None` for non-URI actions (length 0) or empty URIs.
+fn read_uri_path(
+    doc: pdfium_sys::FPDF_DOCUMENT,
+    action: pdfium_sys::FPDF_ACTION,
+) -> Option<String> {
+    let needed =
+        unsafe { ffi!(FPDFAction_GetURIPath(doc, action, std::ptr::null_mut(), 0)) } as usize;
+    if needed < 2 {
+        return None;
+    }
+    let mut buf: Vec<u8> = vec![0; needed];
+    let written = unsafe {
+        ffi!(FPDFAction_GetURIPath(
+            doc,
+            action,
+            buf.as_mut_ptr() as *mut std::os::raw::c_void,
+            needed as std::os::raw::c_ulong,
+        ))
+    } as usize;
+    if written < 2 {
+        return None;
+    }
+    // `written` includes the trailing NUL.
+    let end = written.saturating_sub(1).min(buf.len());
+    let uri = String::from_utf8_lossy(&buf[..end])
+        .trim_matches(char::from(0))
+        .to_string();
+    if uri.is_empty() { None } else { Some(uri) }
 }
 
 const FS_IDENTITY: pdfium_sys::FS_MATRIX = pdfium_sys::FS_MATRIX {

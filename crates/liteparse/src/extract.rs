@@ -5,7 +5,9 @@ use crate::types::{
     ExtractedImage, GraphicPrimitive, ImageRef, OutlineTarget, Page as LitePage, PdfInput, Rect,
     StructNode, TextItem,
 };
-use pdfium::{Document, Font, FontType, Library, Page, PathObject, RectF, SegmentKind, TextPage};
+use pdfium::{
+    Document, Font, FontType, Library, Page, PathObject, PdfLink, RectF, SegmentKind, TextPage,
+};
 
 /// Open a PDF from path or bytes with an optional password.
 ///
@@ -47,7 +49,7 @@ pub(crate) fn extract_pages_from_document(
     target_pages: Option<&[u32]>,
     max_pages: usize,
 ) -> Result<Vec<LitePage>, LiteParseError> {
-    Ok(extract_pages_and_images(document, target_pages, max_pages, false)?.0)
+    Ok(extract_pages_and_images(document, target_pages, max_pages, false, false)?.0)
 }
 
 /// Same as `extract_pages_from_document` but optionally also renders every
@@ -60,6 +62,7 @@ pub(crate) fn extract_pages_and_images(
     target_pages: Option<&[u32]>,
     max_pages: usize,
     render_images: bool,
+    extract_links: bool,
 ) -> Result<(Vec<LitePage>, Vec<ExtractedImage>), LiteParseError> {
     let page_count = document.page_count();
     let mut pages = Vec::new();
@@ -86,7 +89,10 @@ pub(crate) fn extract_pages_and_images(
             right: page.width(),
             bottom: 0.0,
         });
-        let text_items = extract_page_text_items(&page, &text_page, &view_box)?;
+        let mut text_items = extract_page_text_items(&page, &text_page, &view_box)?;
+        if extract_links {
+            assign_links(&mut text_items, &page.links(&view_box));
+        }
         let graphics = extract_page_graphics(&page, &view_box);
         let struct_nodes = extract_page_struct_nodes(&page, &view_box);
         let image_refs = extract_page_image_refs(&page, page_number);
@@ -107,6 +113,50 @@ pub(crate) fn extract_pages_and_images(
     }
 
     Ok((pages, images))
+}
+
+/// Assign hyperlink URIs to text items whose bbox center falls inside a link
+/// annotation's rectangle. Both the item bbox and the link rect are in
+/// viewport space. First matching link wins.
+///
+/// A link rect taller than `MULTILINE_DROP_FACTOR`× the height of the text it
+/// covers is a multi-line annotation given to us as a single *union* box (no
+/// per-line quad points). Its true anchor — which words on the intervening
+/// lines are actually linked — is unrecoverable, so we drop it rather than
+/// wrap a whole sentence in a misleading link. Well-formed multi-line links
+/// expose quad points and arrive here as one single-line rect per line.
+fn assign_links(items: &mut [TextItem], links: &[PdfLink]) {
+    if links.is_empty() {
+        return;
+    }
+    const MULTILINE_DROP_FACTOR: f32 = 1.8;
+    for link in links {
+        let r = &link.rect;
+        let covered: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| {
+                let cx = it.x + it.width / 2.0;
+                let cy = it.y + it.height / 2.0;
+                cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if covered.is_empty() {
+            continue;
+        }
+        let mut heights: Vec<f32> = covered.iter().map(|&i| items[i].height).collect();
+        heights.sort_by(f32::total_cmp);
+        let median_h = heights[heights.len() / 2];
+        if median_h > 0.0 && (r.bottom - r.top) > MULTILINE_DROP_FACTOR * median_h {
+            continue;
+        }
+        for &i in &covered {
+            if items[i].link.is_none() {
+                items[i].link = Some(link.uri.clone());
+            }
+        }
+    }
 }
 
 /// Walk the document outline (bookmarks). Returns entries in pre-order.
@@ -590,8 +640,13 @@ fn extract_page_text_items(
             } else {
                 // Without a pending space: break when a dot follows non-dot content
                 // with a gap larger than typical intra-word spacing (dot leader dots
-                // are spaced apart, unlike periods in abbreviations like "U.S.")
-                c == '.' && seg.has_non_dot_content() && gap > seg.avg_char_width() * 0.4
+                // are spaced apart, unlike periods in abbreviations like "U.S.").
+                // A loosely-kerned abbreviation/sentence period sits at ~1x the
+                // average char width; genuine no-space dot leaders run far wider
+                // (2x+). The earlier 0.4x cutoff sheared the trailing period off
+                // abbreviations like "Sci."/"Chem." whenever the font kerned the
+                // period a hair loose, dropping it entirely downstream.
+                c == '.' && seg.has_non_dot_content() && gap > seg.avg_char_width() * 2.0
             };
 
             if dbg_gaps && y_overlap && !line_changed && gap > 0.0 {
@@ -1479,6 +1534,7 @@ impl SegmentBuilder {
                 fill_color: self.fill_color.clone(),
                 stroke_color: self.stroke_color.clone(),
                 confidence: None,
+                link: None,
             });
         }
 

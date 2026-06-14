@@ -43,6 +43,17 @@ pub(super) fn escape_inline(s: &str) -> String {
     out
 }
 
+/// Wrap `inner` in a markdown inline link to `url`. Uses the angle-bracket
+/// destination form when the URL contains characters that would otherwise
+/// terminate or break the `(url)` form (whitespace or parentheses).
+fn apply_link(inner: &str, url: &str) -> String {
+    if url.contains([' ', '\t', '(', ')']) {
+        format!("[{}](<{}>)", inner, url)
+    } else {
+        format!("[{}]({})", inner, url)
+    }
+}
+
 /// Wrap `inner` with the markdown markers for `style`. Mono wins over bold/italic:
 /// inline code (`` `…` ``) doesn't compose with emphasis in CommonMark, so when
 /// a span is mono we drop the `**/*` wrap. Bold + italic → `***…***`.
@@ -91,9 +102,12 @@ pub(super) fn render_line_inline(line: &ProjectedLine) -> String {
     spans.sort_by(|a, b| a.x.total_cmp(&b.x));
 
     let styles: Vec<SpanStyle> = spans.iter().map(|s| SpanStyle::from_item(s)).collect();
+    let links: Vec<Option<&str>> = spans.iter().map(|s| s.link.as_deref()).collect();
 
-    // Per-line shortcut.
-    let uniform = styles.iter().all(|s| *s == styles[0]);
+    // Per-line shortcut — only when the whole line shares one style AND carries
+    // no hyperlinks (a link must wrap only the spans it covers, so link lines
+    // always take the per-group path below).
+    let uniform = styles.iter().all(|s| *s == styles[0]) && links.iter().all(|l| l.is_none());
     if uniform {
         let joined = collapse_whitespace(&line.text);
         if joined.is_empty() {
@@ -112,8 +126,9 @@ pub(super) fn render_line_inline(line: &ProjectedLine) -> String {
     let mut i = 0;
     while i < spans.len() {
         let style = styles[i];
+        let link = links[i];
         let mut j = i + 1;
-        while j < spans.len() && styles[j] == style {
+        while j < spans.len() && styles[j] == style && links[j] == link {
             j += 1;
         }
         let mut group_text = String::new();
@@ -125,11 +140,14 @@ pub(super) fn render_line_inline(line: &ProjectedLine) -> String {
         }
         let group_text = collapse_whitespace(&group_text);
         let escaped = escape_inline(&group_text);
-        let rendered = if style.is_plain() {
+        let mut rendered = if style.is_plain() {
             escaped
         } else {
             apply_style(&escaped, style)
         };
+        if let Some(url) = link {
+            rendered = apply_link(&rendered, url);
+        }
         if !out.is_empty() && !out.ends_with(' ') {
             out.push(' ');
         }
@@ -199,6 +217,16 @@ pub(super) fn append_inline_continuation(
 /// uniform-mono. Used by the paragraph-level optimization to decide whether
 /// to wrap once around the whole paragraph or fall back to per-line inline.
 pub(super) fn line_uniform_style(line: &ProjectedLine) -> Option<SpanStyle> {
+    // A line carrying any hyperlink can't use the uniform fast path: the link
+    // wraps only its own spans, so such lines must render via the per-group
+    // path in `render_line_inline`.
+    if line
+        .spans
+        .iter()
+        .any(|s| !s.text.trim().is_empty() && s.link.is_some())
+    {
+        return None;
+    }
     let mut iter = line
         .spans
         .iter()
@@ -296,6 +324,43 @@ mod tests {
         assert!(out.contains("*italic*"), "got: {out}");
         assert!(out.contains("plain"), "got: {out}");
         assert!(out.contains("**bold**"), "got: {out}");
+    }
+
+    #[test]
+    fn render_line_inline_wraps_link_span() {
+        // Plain span followed by a linked span → `[anchor](url)` mid-line.
+        let mut l = styled_line(
+            &[
+                ("see", 50.0, Some("Arial")),
+                ("the docs", 150.0, Some("Arial")),
+            ],
+            100.0,
+            10.0,
+        );
+        l.spans[1].link = Some("https://example.com/docs".to_string());
+        let out = render_line_inline(&l);
+        assert!(out.contains("see"), "got: {out}");
+        assert!(
+            out.contains("[the docs](https://example.com/docs)"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_line_inline_link_wraps_outside_emphasis() {
+        // An italic linked span → `[*anchor*](url)` (link outside emphasis).
+        let mut l = styled_line(&[("cite", 50.0, Some("Arial-Italic"))], 100.0, 10.0);
+        l.spans[0].link = Some("https://example.com/p.pdf".to_string());
+        let out = render_line_inline(&l);
+        assert_eq!(out, "[*cite*](https://example.com/p.pdf)");
+    }
+
+    #[test]
+    fn render_line_inline_link_url_with_space_uses_angle_brackets() {
+        let mut l = styled_line(&[("link", 50.0, Some("Arial"))], 100.0, 10.0);
+        l.spans[0].link = Some("https://example.com/a b".to_string());
+        let out = render_line_inline(&l);
+        assert_eq!(out, "[link](<https://example.com/a b>)");
     }
 
     #[test]

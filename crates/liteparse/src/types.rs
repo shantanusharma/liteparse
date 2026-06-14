@@ -58,6 +58,10 @@ pub struct TextItem {
     /// OCR confidence score (0.0–1.0). None for native PDF text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    /// Target URI when this item falls inside a hyperlink annotation's
+    /// rectangle. Populated in `extract.rs`; consumed by the markdown emitter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 #[doc(hidden)]

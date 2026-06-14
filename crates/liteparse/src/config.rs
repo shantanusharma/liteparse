@@ -30,6 +30,10 @@ pub struct LiteParseConfig {
     /// Controls how raster images are surfaced in markdown output. Has no
     /// effect on JSON / text outputs.
     pub image_mode: ImageMode,
+    /// Extract hyperlink annotations and render them as `[text](url)` in
+    /// markdown output. Default on. Disable for benchmark parity with
+    /// plain-text ground truth (the GT corpora never use link syntax).
+    pub extract_links: bool,
 }
 
 /// Image handling for the markdown emitter.
@@ -76,6 +80,7 @@ impl Default for LiteParseConfig {
             quiet: false,
             num_workers: default_num_workers(),
             image_mode: ImageMode::Placeholder,
+            extract_links: true,
         }
     }
 }

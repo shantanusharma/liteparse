@@ -262,6 +262,19 @@ pub struct PdfiumBindings {
     pub FPDFBookmark_GetDest: unsafe extern "C" fn(FPDF_DOCUMENT, FPDF_BOOKMARK) -> FPDF_DEST,
     pub FPDFBookmark_GetAction: unsafe extern "C" fn(FPDF_BOOKMARK) -> FPDF_ACTION,
     pub FPDFAction_GetDest: unsafe extern "C" fn(FPDF_DOCUMENT, FPDF_ACTION) -> FPDF_DEST,
+    pub FPDFAction_GetURIPath: unsafe extern "C" fn(
+        FPDF_DOCUMENT,
+        FPDF_ACTION,
+        *mut std::os::raw::c_void,
+        std::os::raw::c_ulong,
+    ) -> std::os::raw::c_ulong,
+    pub FPDFLink_Enumerate:
+        unsafe extern "C" fn(FPDF_PAGE, *mut std::os::raw::c_int, *mut FPDF_LINK) -> FPDF_BOOL,
+    pub FPDFLink_GetAction: unsafe extern "C" fn(FPDF_LINK) -> FPDF_ACTION,
+    pub FPDFLink_GetAnnotRect: unsafe extern "C" fn(FPDF_LINK, *mut FS_RECTF) -> FPDF_BOOL,
+    pub FPDFLink_CountQuadPoints: unsafe extern "C" fn(FPDF_LINK) -> std::os::raw::c_int,
+    pub FPDFLink_GetQuadPoints:
+        unsafe extern "C" fn(FPDF_LINK, std::os::raw::c_int, *mut FS_QUADPOINTSF) -> FPDF_BOOL,
     pub FPDFDest_GetDestPageIndex:
         unsafe extern "C" fn(FPDF_DOCUMENT, FPDF_DEST) -> std::os::raw::c_int,
     pub FPDFDest_GetLocationInPage: unsafe extern "C" fn(
@@ -399,6 +412,12 @@ impl PdfiumBindings {
             FPDFBookmark_GetDest: load_fn!(lib, "FPDFBookmark_GetDest"),
             FPDFBookmark_GetAction: load_fn!(lib, "FPDFBookmark_GetAction"),
             FPDFAction_GetDest: load_fn!(lib, "FPDFAction_GetDest"),
+            FPDFAction_GetURIPath: load_fn!(lib, "FPDFAction_GetURIPath"),
+            FPDFLink_Enumerate: load_fn!(lib, "FPDFLink_Enumerate"),
+            FPDFLink_GetAction: load_fn!(lib, "FPDFLink_GetAction"),
+            FPDFLink_GetAnnotRect: load_fn!(lib, "FPDFLink_GetAnnotRect"),
+            FPDFLink_CountQuadPoints: load_fn!(lib, "FPDFLink_CountQuadPoints"),
+            FPDFLink_GetQuadPoints: load_fn!(lib, "FPDFLink_GetQuadPoints"),
             FPDFDest_GetDestPageIndex: load_fn!(lib, "FPDFDest_GetDestPageIndex"),
             FPDFDest_GetLocationInPage: load_fn!(lib, "FPDFDest_GetLocationInPage"),
 

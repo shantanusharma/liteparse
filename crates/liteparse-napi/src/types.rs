@@ -39,6 +39,9 @@ pub struct JsLiteParseConfig {
     /// (default — emits `![](image_pN_K.png)` references with no bytes), or
     /// "embed" (also returns each image's PNG bytes on `images`).
     pub image_mode: Option<String>,
+    /// Render hyperlink annotations as `[text](url)` in markdown output
+    /// (default true). Set false for plain anchor text.
+    pub extract_links: Option<bool>,
 }
 
 impl JsLiteParseConfig {
@@ -91,6 +94,9 @@ impl JsLiteParseConfig {
                 _ => ImageMode::Placeholder,
             };
         }
+        if let Some(v) = self.extract_links {
+            cfg.extract_links = v;
+        }
         cfg
     }
 
@@ -117,6 +123,7 @@ impl JsLiteParseConfig {
                 ImageMode::Placeholder => "placeholder".to_string(),
                 ImageMode::Embed => "embed".to_string(),
             }),
+            extract_links: Some(cfg.extract_links),
         }
     }
 }

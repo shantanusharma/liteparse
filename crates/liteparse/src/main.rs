@@ -104,6 +104,13 @@ struct ParseCommand {
     /// modes. Created if missing.
     #[arg(long)]
     image_output_dir: Option<String>,
+
+    /// Disable hyperlink extraction. By default, URI link annotations are
+    /// rendered as `[text](url)` in markdown output. Pass this to emit the
+    /// anchor text as plain text instead (e.g. for plain-text benchmark
+    /// parity, where ground truth uses no link syntax).
+    #[arg(long)]
+    no_links: bool,
 }
 
 #[derive(Args, Debug)]
@@ -247,6 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 quiet: cmd.quiet,
                 ocr_server_url: cmd.ocr_server_url,
                 image_mode,
+                extract_links: !cmd.no_links,
                 ..Default::default()
             };
             if let Some(n) = cmd.num_workers {
