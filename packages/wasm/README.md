@@ -87,8 +87,6 @@ npm run build:nodejs    # for node.js
 
 Output goes to `pkg/`.
 
-> **Note:** A real build also needs a static `libpdfium.a` compiled for `wasm32-unknown-emscripten`/`wasm32-unknown-unknown` exposed via `PDFIUM_LIB_PATH`. See the project root `crates/WASM_PLAN.md` for details.
-
 ## License
 
 Apache-2.0

@@ -41,6 +41,19 @@ fn main() {
         println!("cargo:rustc-link-lib=static=c++abi");
         println!("cargo:rustc-link-lib=static=wasi-emulated-mman");
         println!("cargo:rustc-link-lib=static=wasi-emulated-signal");
+        // Newer pdfium-binaries releases ship the wasm setjmp/longjmp runtime
+        // in a standalone libsetjmp.a, which pdfium's bundled libjpeg/freetype
+        // reference for their __c_longjmp error handling. Older releases folded
+        // these into libc.a, so only link it when the archive is present.
+        //
+        // NOTE: libsetjmp.a's single object also redefines the __wasm_setjmp/
+        // __wasm_longjmp helpers that Rust's own codegen emits. The
+        // --allow-multiple-definition link-arg needed to tolerate that lives in
+        // the final cdylib's build script (crates/liteparse-wasm/build.rs),
+        // because rustc-link-arg does not propagate to dependent crates.
+        if lib_dir.join("libsetjmp.a").exists() {
+            println!("cargo:rustc-link-lib=static=setjmp");
+        }
         println!("cargo:lib_path={}", lib_dir.display());
     } else {
         // Non-wasm: pdfium is loaded at runtime via libloading (no link-time

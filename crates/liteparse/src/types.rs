@@ -276,6 +276,12 @@ pub struct ProjectedLine {
     /// (banded splits with sub-columns) survive paragraph/table grouping.
     pub region_path: Vec<u16>,
     pub mcid: Option<i32>,
+    /// True when the line's original-coordinate bbox falls inside a detected
+    /// figure/chart region. Chart text (axis labels, legends, category titles)
+    /// is often set in a font larger than real headings; if it reached the
+    /// heading-size histogram it would hijack the top heading levels and get
+    /// promoted itself. Heading detection skips these lines.
+    pub in_figure: bool,
 }
 
 /// XY-cut region tree node. A page's root region recursively splits along H or

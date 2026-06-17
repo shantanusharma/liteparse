@@ -13,7 +13,7 @@ use super::inline::{
 use super::lists::{LIST_INDENT_STEP_PT, parse_list_marker};
 use super::paragraphs::{
     ParaAccum, append_to_paragraph, collapse_whitespace, continues_heading, continues_paragraph,
-    ends_hyphenated, is_soft_hyphen_break,
+    ends_hyphenated, ends_sentence_final, is_soft_hyphen_break,
 };
 use super::repetition::is_header_or_footer;
 use super::tables::{detect_ruled_tables, detect_tables, merge_table_runs};
@@ -617,11 +617,16 @@ fn classify_region(
                 outline_heading_level(line, page.page_height, outline, text)
             }
         });
-        let size_level = if is_caption_line(text) || toc_suppress {
-            None
-        } else {
-            heading_level_for(heading_size_of(line), heading_map)
-        };
+        // Rotated lines (margin stamps like a sideways "arXiv:…" watermark) are
+        // excluded from `build_heading_map`, but their size can still coincide
+        // with a map entry built from horizontal text. Suppress font-size
+        // promotion for them so they don't surface as spurious headings.
+        let size_level =
+            if is_caption_line(text) || toc_suppress || is_rotated_line(line) || line.in_figure {
+                None
+            } else {
+                heading_level_for(heading_size_of(line), heading_map)
+            };
         // Guard against height-jitter false headings: a line that flows from
         // the previous line (same paragraph) AND starts lowercase is a
         // mid-paragraph continuation, not a heading — even if its
@@ -639,8 +644,21 @@ fn classify_region(
             // line is its continuation regardless of capitalization
             // ("…SOLAR 10.7 Billion-" / "Parameter Model: We have…").
             let prev_hyphen_wrap = prev.is_some_and(|p| ends_hyphenated(&p.text));
-            !((starts_lower || prev_hyphen_wrap)
-                && prev.is_some_and(|p| continues_paragraph(p, line)))
+            // `prev` is the *live body paragraph* (or list line) immediately
+            // above, so it only exists mid-paragraph — never right after a
+            // heading. A lowercase line that *completes a sentence* (ends with
+            // terminal punctuation) while its predecessor is left open (no
+            // terminal punctuation) is a wrapped sentence tail, not a heading —
+            // even when a centered short tail's large left-edge indent defeats
+            // `continues_paragraph` ("…journalistic or" → "scholarly works.").
+            // Requiring the tail to end a sentence keeps genuine lowercase
+            // headings (which rarely end in `.`/`!`/`?`) promoted.
+            let sentence_tail = starts_lower
+                && ends_sentence_final(text)
+                && prev.is_some_and(|p| !ends_sentence_final(&p.text));
+            let is_continuation =
+                prev.is_some_and(|p| continues_paragraph(p, line)) || sentence_tail;
+            !((starts_lower || prev_hyphen_wrap) && is_continuation)
         });
         // Long-text guard: a real heading is a label, not a sentence with
         // multiple clauses. Footnotes / citations / captions that happen to

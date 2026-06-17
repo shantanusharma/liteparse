@@ -24,6 +24,7 @@ pub(crate) fn line(text: &str, x: f32, y: f32, h: f32, size: f32) -> ProjectedLi
         spans: vec![TextItem::default()],
         region_path: Vec::new(),
         mcid: None,
+        in_figure: false,
     }
 }
 
@@ -95,6 +96,7 @@ pub(crate) fn line_with_spans(cells: &[(&str, f32)], y: f32, size: f32) -> Proje
         spans,
         region_path: Vec::new(),
         mcid: None,
+        in_figure: false,
     }
 }
 
@@ -145,6 +147,7 @@ pub(crate) fn styled_line(spans: &[(&str, f32, Option<&str>)], y: f32, size: f32
         spans: items,
         region_path: Vec::new(),
         mcid: None,
+        in_figure: false,
     }
 }
 

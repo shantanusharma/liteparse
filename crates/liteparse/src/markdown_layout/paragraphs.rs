@@ -68,6 +68,21 @@ pub(super) fn ends_hyphenated(text: &str) -> bool {
     t.ends_with('-') && t.chars().rev().nth(1).is_some_and(|c| c.is_alphabetic())
 }
 
+/// True when `text` ends a sentence: its last non-space character (ignoring a
+/// trailing closing quote / bracket) is `.`, `!`, or `?`. The heading
+/// lowercase-continuation guard uses the negation — a previous line that does
+/// *not* end a sentence is an open clause that a following lowercase line
+/// continues, even when its left-edge indent defeats `continues_paragraph`
+/// (centered short tail lines like "…journalistic or" → "scholarly works.").
+pub(super) fn ends_sentence_final(text: &str) -> bool {
+    let t = text
+        .trim_end()
+        .trim_end_matches(|c| matches!(c, '"' | '\'' | ')' | ']' | '»' | '”' | '’'));
+    t.chars()
+        .next_back()
+        .is_some_and(|c| matches!(c, '.' | '!' | '?'))
+}
+
 /// True when `prev` ends with a soft hyphen (see [`ends_hyphenated`]) and
 /// `next` begins with a lowercase letter — the signal that a single word was
 /// split across a line / block / region break and should be rejoined with the

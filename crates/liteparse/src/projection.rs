@@ -3091,16 +3091,14 @@ fn xy_root_bbox(items: &[ProjectedTextItem], page_width: f32, page_height: f32) 
     let y = min_y.max(0.0);
     let w = (max_x - x).max(1.0);
     let h = (max_y - y).max(1.0);
-    let w = if page_width > 0.0 {
-        w.min(page_width)
-    } else {
-        w
-    };
-    let h = if page_height > 0.0 {
-        h.min(page_height)
-    } else {
-        h
-    };
+    // Span the actual item extent. The page dimensions are only used as a
+    // fallback (no items). We must NOT clamp the bbox down to them:
+    // `handle_rotation_reading_order` lays rotated marginalia (e.g. an arXiv
+    // sidebar stamp) out on a virtual canvas taller/wider than the physical
+    // page and pushes the non-rotated body below it. Clamping to page_height
+    // would drop those displaced body items outside the density buckets, so no
+    // horizontal valley between a full-width header and the 2-column body is
+    // ever found and the column V-cut shreds the centered title/author band.
     Rect {
         x,
         y,
@@ -4568,6 +4566,19 @@ pub(crate) fn build_projected_lines(
     let mut leaves: Vec<(Vec<u16>, Vec<usize>)> = Vec::new();
     xy_walk_leaves(&region, &mut Vec::new(), &mut leaves);
 
+    // Figures used for the per-line `in_figure` heading-exclusion flag. Drop
+    // page-dominating figures: on posters / slides / infographics the whole
+    // page is one large graphic and its big text *is* the heading content, so
+    // excluding it would demote real headings. A chart on an academic page
+    // covers only a fraction of the page — that's the pollution we want out of
+    // the heading histogram.
+    let page_area = (page_width.max(1.0)) * (page_height.max(1.0));
+    let heading_excl_figures: Vec<Rect> = figures
+        .iter()
+        .filter(|f| f.width * f.height < page_area * 0.55)
+        .cloned()
+        .collect();
+
     let mut out: Vec<ProjectedLine> = Vec::new();
     for (path, indices) in leaves {
         // Sort within the leaf by y, tie-break by x. `build_one_line` re-sorts
@@ -4626,14 +4637,24 @@ pub(crate) fn build_projected_lines(
                 current_y = current_y.min(y);
                 current_h = current_h.max(h);
             } else {
-                out.push(build_one_line(items, &current, path.clone()));
+                out.push(build_one_line(
+                    items,
+                    &current,
+                    path.clone(),
+                    &heading_excl_figures,
+                ));
                 current = vec![idx];
                 current_y = y;
                 current_h = h;
             }
         }
         if !current.is_empty() {
-            out.push(build_one_line(items, &current, path.clone()));
+            out.push(build_one_line(
+                items,
+                &current,
+                path.clone(),
+                &heading_excl_figures,
+            ));
         }
     }
 
@@ -4673,6 +4694,7 @@ fn build_one_line(
     items: &[ProjectedTextItem],
     idxs: &[usize],
     region_path: Vec<u16>,
+    figures: &[Rect],
 ) -> ProjectedLine {
     // Sort by x so concatenation reads left→right even if reading order had
     // rotated insertions.
@@ -4684,6 +4706,14 @@ fn build_one_line(
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
+    // Original-coordinate bbox (pre-rotation-displacement). `figures` are in
+    // original page space, so figure-overlap must be tested here, not against
+    // the projected `bbox` below (which can be displaced onto a virtual canvas
+    // by `handle_rotation_reading_order`).
+    let mut omin_x = f32::INFINITY;
+    let mut omin_y = f32::INFINITY;
+    let mut omax_x = f32::NEG_INFINITY;
+    let mut omax_y = f32::NEG_INFINITY;
 
     let mut size_weights: HashMap<u32, (f32, usize)> = HashMap::new();
     let mut height_weights: HashMap<u32, (f32, usize)> = HashMap::new();
@@ -4703,7 +4733,15 @@ fn build_one_line(
     for (pos, &i) in sorted.iter().enumerate() {
         let proj = &items[i];
         let it = &proj.item;
-        spans.push(it.clone());
+        // `handle_rotation_reading_order` zeroes `item.rotation` after it
+        // reorders cardinal-rotated text into reading order, so the span would
+        // otherwise look horizontal to `is_rotated_line`. Restore the original
+        // rotation onto the span clone (only consumed by markdown heading/TOC
+        // rotation guards) so a sideways margin stamp doesn't pollute the
+        // heading-size map.
+        let mut span = it.clone();
+        span.rotation = proj.orig_rotation;
+        spans.push(span);
 
         // Concatenate item text. Use existing num_spaces from projection only as
         // a hint — the markdown emitter re-collapses whitespace, so we just
@@ -4717,6 +4755,11 @@ fn build_one_line(
         min_y = min_y.min(it.y);
         max_x = max_x.max(it.x + it.width);
         max_y = max_y.max(it.y + it.height);
+
+        omin_x = omin_x.min(proj.orig_x);
+        omin_y = omin_y.min(proj.orig_y);
+        omax_x = omax_x.max(proj.orig_x + proj.orig_width);
+        omax_y = omax_y.max(proj.orig_y + proj.orig_height);
 
         let n = it.text.chars().count().max(1);
         total_chars += n;
@@ -4841,6 +4884,27 @@ fn build_one_line(
         },
     };
 
+    // Figure membership: ≥50% of the line's original-coordinate area inside a
+    // detected figure that is also clearly taller than the line. The height
+    // guard is what separates real chart pollution (axis labels, legends — set
+    // inside tall plot regions) from a section heading sitting on a thin
+    // colored background bar, which figure detection can mis-cluster as a
+    // figure ~1 line tall. Only the former should lose heading candidacy.
+    let line_h = (omax_y - omin_y).max(0.0);
+    let in_figure = if omax_x > omin_x && line_h > 0.0 {
+        let line_area = (omax_x - omin_x) * line_h;
+        figures.iter().any(|f| {
+            if f.height < line_h * 3.0 {
+                return false;
+            }
+            let ix = (omax_x.min(f.x + f.width) - omin_x.max(f.x)).max(0.0);
+            let iy = (omax_y.min(f.y + f.height) - omin_y.max(f.y)).max(0.0);
+            line_area > 0.0 && (ix * iy) / line_area >= 0.5
+        })
+    } else {
+        false
+    };
+
     ProjectedLine {
         text,
         bbox: bbox.clone(),
@@ -4860,6 +4924,7 @@ fn build_one_line(
         spans,
         region_path,
         mcid,
+        in_figure,
     }
 }
 

@@ -21,6 +21,28 @@ pub(super) const ESTIMATED_HEADING_SIZE_MARGIN: f32 = 1.5;
 /// Cap on heading levels (matches plan: H1..H6).
 pub(super) const MAX_HEADING_LEVELS: usize = 6;
 
+/// A normalized line text that recurs at least this many times among
+/// heading-candidate lines (size > body) is treated as chart/figure label
+/// spam, not a heading, and is excluded from the heading-size map. Example:
+/// the "Input-Input Layer5" attention-plot labels in academic papers render
+/// at 23–28pt (far above body) and would otherwise hijack H1..H3, demoting the
+/// real title and section headings. Genuine headings are not byte-identical
+/// across the document, so this never drops a real heading size *unless* that
+/// size is occupied solely by the repeated string — and the exclusion is
+/// per-line, so a repeated string sharing a font size with real headings
+/// leaves that level intact.
+pub(super) const REPEATED_HEADING_LINE_MIN: usize = 3;
+
+/// Normalize a line's text for repeat-detection: collapse internal whitespace
+/// and lowercase, so trivially-different renderings of the same label string
+/// still hash together.
+fn normalize_repeat_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// Tighter tolerance for matching against the heading-size map. Keeps the
 /// heading detector strict so descender-induced height jitter doesn't promote
 /// regular body lines to headings.
@@ -621,11 +643,34 @@ const MIN_HEADING_ALPHA_RATIO: f32 = 0.5;
 /// artifacts), sorted descending, mapped to levels 1..=MAX_HEADING_LEVELS.
 pub fn build_heading_map(pages: &[ParsedPage], body_size: f32) -> Vec<(f32, u8)> {
     use std::collections::HashMap;
+    let heading_margin = |line: &ProjectedLine| {
+        if line.font_size_is_estimated {
+            ESTIMATED_HEADING_SIZE_MARGIN
+        } else {
+            HEADING_SIZE_EPSILON
+        }
+    };
+    // First pass: frequency of each normalized candidate-line text. A string
+    // that recurs ≥ REPEATED_HEADING_LINE_MIN times is chart/figure label spam
+    // (e.g. repeated attention-plot labels at 23–28pt), not a heading.
+    let mut text_freq: HashMap<String, usize> = HashMap::new();
+    for page in pages {
+        for line in &page.projected_lines {
+            if is_rotated_line(line) || is_caption_line(&line.text) || line.in_figure {
+                continue;
+            }
+            if heading_size_of(line) > body_size + heading_margin(line) {
+                *text_freq
+                    .entry(normalize_repeat_key(&line.text))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
     // (size_key → (size, line_count, total_chars, alpha_chars))
     let mut sizes: HashMap<u32, (f32, usize, usize, usize)> = HashMap::new();
     for page in pages {
         for line in &page.projected_lines {
-            if is_rotated_line(line) {
+            if is_rotated_line(line) || line.in_figure {
                 continue;
             }
             // Captions ("Figure 7", "Table 3.") often render slightly larger
@@ -633,12 +678,18 @@ pub fn build_heading_map(pages: &[ParsedPage], body_size: f32) -> Vec<(f32, u8)>
             if is_caption_line(&line.text) {
                 continue;
             }
+            // Exclude repeated chart/figure labels (per-line, so a repeated
+            // string sharing a size with real headings still leaves that level).
+            if text_freq
+                .get(&normalize_repeat_key(&line.text))
+                .copied()
+                .unwrap_or(0)
+                >= REPEATED_HEADING_LINE_MIN
+            {
+                continue;
+            }
             let size = heading_size_of(line);
-            let margin = if line.font_size_is_estimated {
-                ESTIMATED_HEADING_SIZE_MARGIN
-            } else {
-                HEADING_SIZE_EPSILON
-            };
+            let margin = heading_margin(line);
             if size > body_size + margin {
                 let key = (size * 100.0).round() as u32;
                 let entry = sizes.entry(key).or_insert((size, 0, 0, 0));

@@ -127,6 +127,7 @@ mod tests {
             spans: vec![TextItem::default()],
             region_path: Vec::new(),
             mcid: None,
+            in_figure: false,
         }
     }
 
