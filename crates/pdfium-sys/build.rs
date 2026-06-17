@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const PDFIUM_RELEASE_TAG: &str = "chromium/7884";
+const PDFIUM_RELEASE_TAG: &str = "chromium/7897";
 const PDFIUM_RELEASE_URL: &str = "https://github.com/run-llama/pdfium-binaries/releases/download";
 
 fn main() {
