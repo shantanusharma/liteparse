@@ -307,10 +307,8 @@ pub fn run_cli(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 
             for file_path in &files {
                 let t0 = std::time::Instant::now();
-                let rel = file_path.strip_prefix(&cmd.input_dir).unwrap_or(file_path);
-                let out_path = std::path::Path::new(&cmd.output_dir)
-                    .join(rel)
-                    .with_extension(out_ext);
+                let out_path =
+                    batch_output_path(file_path, &cmd.input_dir, &cmd.output_dir, out_ext);
 
                 if let Some(parent) = out_path.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -375,6 +373,42 @@ fn collect_files(
     collect_files_inner(std::path::Path::new(dir), recursive, ext_filter, &mut files)?;
     files.sort();
     Ok(files)
+}
+
+fn batch_output_path(
+    file_path: &str,
+    input_dir: &str,
+    output_dir: &str,
+    out_ext: &str,
+) -> std::path::PathBuf {
+    let file_path = std::path::Path::new(file_path);
+    let rel = file_path
+        .strip_prefix(std::path::Path::new(input_dir))
+        .unwrap_or(file_path);
+
+    std::path::Path::new(output_dir)
+        .join(rel)
+        .with_extension(out_ext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::batch_output_path;
+    use std::path::Path;
+
+    #[test]
+    fn batch_output_path_preserves_output_dir_without_trailing_slash() {
+        let out_path = batch_output_path("docs/report.pdf", "docs", "out", "txt");
+
+        assert_eq!(out_path, Path::new("out/report.txt"));
+    }
+
+    #[test]
+    fn batch_output_path_mirrors_nested_files_without_trailing_slash() {
+        let out_path = batch_output_path("docs/nested/report.pdf", "docs", "out", "md");
+
+        assert_eq!(out_path, Path::new("out/nested/report.md"));
+    }
 }
 
 fn collect_files_inner(
