@@ -1,3 +1,4 @@
+use file_format::FileFormat;
 use tempfile::TempDir;
 
 use crate::error::LiteParseError;
@@ -553,7 +554,16 @@ pub async fn convert_image_to_pdf(
 }
 
 pub fn guess_extension_from_data(data: &[u8]) -> Option<String> {
-    infer::get(data).map(|k| k.extension().to_string())
+    // `file-format` inspects ZIP-based containers via their central directory
+    // (requires the `reader` feature), so DOCX/XLSX/PPTX/ODF resolve to their
+    // specific format instead of a generic "zip" regardless of entry ordering
+    // or file size. Unrecognized input falls back to the generic binary format,
+    // which we surface as `None` to match the prior contract.
+    let fmt = FileFormat::from_bytes(data);
+    if fmt == FileFormat::ArbitraryBinaryData {
+        return None;
+    }
+    Some(fmt.extension().to_string())
 }
 
 pub async fn convert_data_to_pdf(
@@ -600,6 +610,74 @@ mod tests {
         assert!(is_supported_extension("a.svg"));
         assert!(!is_supported_extension("a.exe"));
         assert!(!is_supported_extension("noext"));
+    }
+
+    /// Build a minimal but structurally valid ZIP (stored, empty entries) whose
+    /// central directory lists `names`. This exercises the same code path
+    /// `file-format` uses to disambiguate ZIP-based office formats.
+    fn build_zip(names: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut offsets = Vec::new();
+        for name in names {
+            offsets.push(out.len() as u32);
+            let nb = name.as_bytes();
+            out.extend_from_slice(&0x0403_4b50u32.to_le_bytes()); // local header sig
+            out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            out.extend_from_slice(&[0u8; 20]); // flags..uncompressed size (all zero)
+            out.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            out.extend_from_slice(nb);
+        }
+        let cd_offset = out.len() as u32;
+        let mut central = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let nb = name.as_bytes();
+            central.extend_from_slice(&0x0201_4b50u32.to_le_bytes()); // central header sig
+            central.extend_from_slice(&20u16.to_le_bytes()); // version made by
+            central.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            central.extend_from_slice(&[0u8; 20]); // flags..uncompressed size
+            central.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+            central.extend_from_slice(&[0u8; 8]); // extra/comment/disk/internal attrs
+            central.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+            central.extend_from_slice(&offsets[i].to_le_bytes()); // local header offset
+            central.extend_from_slice(nb);
+        }
+        let cd_size = central.len() as u32;
+        out.extend_from_slice(&central);
+        out.extend_from_slice(&0x0605_4b50u32.to_le_bytes()); // EOCD sig
+        out.extend_from_slice(&[0u8; 4]); // disk numbers
+        out.extend_from_slice(&(names.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(names.len() as u16).to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_offset.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // comment len
+        out
+    }
+
+    #[test]
+    fn test_guess_extension_disambiguates_zip_office_formats() {
+        // ZIP-based office formats must resolve to their specific type, not a
+        // generic "zip", even though they share the PK signature.
+        assert_eq!(
+            guess_extension_from_data(&build_zip(&["[Content_Types].xml", "word/document.xml"]))
+                .as_deref(),
+            Some("docx")
+        );
+        assert_eq!(
+            guess_extension_from_data(&build_zip(&["[Content_Types].xml", "xl/workbook.xml"]))
+                .as_deref(),
+            Some("xlsx")
+        );
+        assert_eq!(
+            guess_extension_from_data(&build_zip(&["[Content_Types].xml", "ppt/presentation.xml"]))
+                .as_deref(),
+            Some("pptx")
+        );
+        // A plain ZIP with no office markers stays "zip".
+        assert_eq!(
+            guess_extension_from_data(&build_zip(&["random/file.txt"])).as_deref(),
+            Some("zip")
+        );
     }
 
     #[test]
