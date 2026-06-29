@@ -32,7 +32,7 @@ impl HttpOcrResponseItem {
     }
 }
 
-/// A single detection from the LlamaParse prod OCR worker, which emits
+/// A single detection from an OCR worker, which emits
 /// EasyOCR/PaddleOCR-style positional tuples: `[polygon, text, confidence]`,
 /// where `polygon` is a list of `[x, y]` points (4 for both engines) ordered
 /// top-left → top-right → bottom-right → bottom-left.
@@ -68,7 +68,7 @@ impl ProdOcrItem {
     }
 }
 
-/// Accepts either the LiteParse standard response or the LlamaParse prod OCR
+/// Accepts either the LiteParse standard response or the prod OCR
 /// worker response. Untagged: serde tries `Standard` first (keyed on
 /// `results` with object items), then falls back to `Prod` (keyed on `result`
 /// with positional-tuple items).
@@ -107,8 +107,7 @@ pub struct HttpOcrEngine {
     retry: OcrRetryConfig,
 }
 
-/// Retry/backoff policy for OCR HTTP requests. The defaults mirror the
-/// LlamaParse worker's OCR retry semantics (`ocrRetryPolicy.ts`: up to 10
+/// Retry/backoff policy for OCR HTTP requests. The default is up to 10
 /// attempts, 1s base backoff doubling to a 10s cap, plus jitter, with a fast
 /// path for dropped connections) so that liteparse-driven OCR is as resilient
 /// to a down / rate-limited `/ocr` endpoint as the legacy worker path was.
@@ -450,7 +449,6 @@ mod tests {
 
     #[test]
     fn test_prod_response_deserializes() {
-        // LlamaParse prod worker shape: `result` tuples + `document_angle`.
         let raw = r#"{"document_angle":-90,"result":[[[[10.0,20.0],[60.0,20.0],[60.0,40.0],[10.0,40.0]],"hi",0.85]]}"#;
         let parsed: HttpOcrResponse = serde_json::from_str(raw).unwrap();
         let results = parsed.into_results();

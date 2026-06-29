@@ -1,5 +1,5 @@
 //! Built-in [`GlyphResolver`] backed by a fragmented glyph-outline → unicode
-//! database (the LlamaParse "font-forge" map).
+//! database / map.
 //!
 //! The database is a directory of `%02x%02x.msgpack` shards. Each shard is a
 //! stream of concatenated 2-element msgpack arrays `[hash, unicode]`:
@@ -9,8 +9,7 @@
 //!
 //! To resolve a glyph we hash its outline segments exactly as the producer did
 //! — little-endian `{i32 segment_type, f32 x, f32 y}` per segment, BLAKE3,
-//! truncated to 16 bytes — load the matching shard, and look the key up. This
-//! mirrors the C consumer in `llamaparse/pdfium/parse/src/core/font.c`.
+//! truncated to 16 bytes — load the matching shard, and look the key up.
 //!
 //! Not compiled for `wasm32` (no filesystem). Construct directly, or let
 //! [`crate::LiteParse::new`] auto-wire one when `LITEPARSE_FONT_DB_DIR` is set.
