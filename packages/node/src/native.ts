@@ -91,6 +91,7 @@ export interface NativeParsedPage {
   width: number;
   height: number;
   text: string;
+  markdown: string;
   textItems: NativeTextItem[];
 }
 

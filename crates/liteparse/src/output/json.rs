@@ -90,6 +90,7 @@ mod tests {
             page_width: 612.0,
             page_height: 792.0,
             text: "txt".into(),
+            markdown: String::new(),
             text_items: items,
             projected_lines: vec![],
             regions: crate::types::Region::default(),

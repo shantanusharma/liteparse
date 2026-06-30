@@ -350,7 +350,7 @@ impl LiteParse {
         ));
 
         // Grid projection
-        let parsed_pages = projection::project_pages_to_grid(pages);
+        let mut parsed_pages = projection::project_pages_to_grid(pages);
         let t2 = web_time::Instant::now();
         log(&format!(
             "[liteparse] project: {:.1}ms",
@@ -358,7 +358,12 @@ impl LiteParse {
         ));
 
         let full_text = if self.config.output_format == crate::config::OutputFormat::Markdown {
-            let md = markdown::format_markdown(&parsed_pages, &outline, self.config.image_mode);
+            let page_md =
+                markdown::format_markdown_pages(&parsed_pages, &outline, self.config.image_mode);
+            let md = page_md.join("\n\n-----\n\n");
+            for (page, md) in parsed_pages.iter_mut().zip(page_md) {
+                page.markdown = md;
+            }
             let t3 = web_time::Instant::now();
             log(&format!(
                 "[liteparse] markdown: {:.1}ms",
@@ -393,10 +398,16 @@ impl LiteParse {
     /// is fully synchronous. Used when an external extractor (e.g. with its
     /// own font-recovery pipeline) owns text extraction.
     pub fn parse_from_pages(&self, pages: Vec<Page>, outline: Vec<OutlineTarget>) -> ParseResult {
-        let parsed_pages = projection::project_pages_to_grid(pages);
+        let mut parsed_pages = projection::project_pages_to_grid(pages);
 
         let full_text = if self.config.output_format == crate::config::OutputFormat::Markdown {
-            markdown::format_markdown(&parsed_pages, &outline, self.config.image_mode)
+            let page_md =
+                markdown::format_markdown_pages(&parsed_pages, &outline, self.config.image_mode);
+            let md = page_md.join("\n\n-----\n\n");
+            for (page, md) in parsed_pages.iter_mut().zip(page_md) {
+                page.markdown = md;
+            }
+            md
         } else {
             parsed_pages
                 .iter()

@@ -136,6 +136,7 @@ export interface JsParsedPage {
   width: number
   height: number
   text: string
+  markdown: string
   textItems: Array<JsTextItem>
 }
 export interface JsParseResult {

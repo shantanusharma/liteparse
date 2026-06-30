@@ -22,65 +22,78 @@ pub fn format_markdown(
     outline: &[OutlineTarget],
     image_mode: ImageMode,
 ) -> String {
+    format_markdown_pages(pages, outline, image_mode).join("\n\n-----\n\n")
+}
+
+/// Render each page to its own markdown string, returning one entry per input
+/// page (in order). [`format_markdown`] joins these with page separators to
+/// build the document output; callers wanting per-page markdown (e.g. to
+/// populate `ParsedPage.markdown`) use this directly. Doc-level context
+/// (body size, heading map, header/footer set) is still computed across all
+/// pages so a single page renders identically whether requested alone or as
+/// part of the document.
+pub fn format_markdown_pages(
+    pages: &[ParsedPage],
+    outline: &[OutlineTarget],
+    image_mode: ImageMode,
+) -> Vec<String> {
     if pages.is_empty() {
-        return String::new();
+        return Vec::new();
     }
 
     let body_size = compute_body_size(pages);
     let heading_map = build_heading_map(pages, body_size);
     let header_footer = compute_header_footer_set(pages);
 
-    let mut out = String::new();
-    for (i, page) in pages.iter().enumerate() {
-        if i > 0 {
-            out.push_str("\n\n-----\n\n");
-        }
-        if page.projected_lines.is_empty() {
-            // No structural metadata for this page — fall back to the
-            // projection text inside a fence so nothing is dropped.
-            out.push_str("```text\n");
-            out.push_str(&page.text);
-            if !page.text.ends_with('\n') {
-                out.push('\n');
+    pages
+        .iter()
+        .map(|page| {
+            if page.projected_lines.is_empty() {
+                // No structural metadata for this page — fall back to the
+                // projection text inside a fence so nothing is dropped.
+                let mut out = String::from("```text\n");
+                out.push_str(&page.text);
+                if !page.text.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("```");
+                return out;
             }
-            out.push_str("```");
-            continue;
-        }
 
-        // Filter outline entries to this page so the classifier's y/title
-        // match is a O(entries_on_page) scan per line, not O(whole doc).
-        let target_index = (page.page_number as i32).saturating_sub(1);
-        let page_outline: Vec<OutlineTarget> = outline
-            .iter()
-            .filter(|e| e.page_index == target_index)
-            .cloned()
-            .collect();
-        let chrome_indices = detect_single_page_chrome(page, body_size);
-        let mut blocks = classify_page_with_filters(
-            page,
-            &heading_map,
-            &header_footer,
-            &page_outline,
-            image_mode,
-            &chrome_indices,
-        );
-        // A page whose only surviving blocks are horizontal rules (all its
-        // text was stripped as chrome) should render empty, not as a stack
-        // of bare `---` separators.
-        let has_content = blocks.iter().any(|b| {
-            !matches!(
-                b,
-                crate::markdown_layout::Block::HorizontalRule
-                    | crate::markdown_layout::Block::Figure { .. }
-            )
-        });
-        if !has_content {
-            blocks.retain(|b| !matches!(b, crate::markdown_layout::Block::HorizontalRule));
-        }
-        dedupe_rules(&mut blocks);
-        out.push_str(&render_blocks(&blocks));
-    }
-    out
+            // Filter outline entries to this page so the classifier's y/title
+            // match is a O(entries_on_page) scan per line, not O(whole doc).
+            let target_index = (page.page_number as i32).saturating_sub(1);
+            let page_outline: Vec<OutlineTarget> = outline
+                .iter()
+                .filter(|e| e.page_index == target_index)
+                .cloned()
+                .collect();
+            let chrome_indices = detect_single_page_chrome(page, body_size);
+            let mut blocks = classify_page_with_filters(
+                page,
+                &heading_map,
+                &header_footer,
+                &page_outline,
+                image_mode,
+                &chrome_indices,
+            );
+            // A page whose only surviving blocks are horizontal rules (all its
+            // text was stripped as chrome) should render empty, not as a stack
+            // of bare `---` separators.
+            let has_content = blocks.iter().any(|b| {
+                !matches!(
+                    b,
+                    crate::markdown_layout::Block::HorizontalRule
+                        | crate::markdown_layout::Block::Figure { .. }
+                )
+            });
+            if !has_content {
+                blocks.retain(|b| !matches!(b, crate::markdown_layout::Block::HorizontalRule));
+            }
+            dedupe_rules(&mut blocks);
+            render_blocks(&blocks)
+        })
+        .collect()
 }
 
 /// Collapse cosmetic horizontal-rule noise on a single page's block stream:
@@ -137,6 +150,7 @@ mod tests {
             page_width: 612.0,
             page_height: 792.0,
             text: "fallback".into(),
+            markdown: String::new(),
             text_items: vec![],
             projected_lines: lines,
             regions: crate::types::Region::default(),
@@ -184,6 +198,7 @@ mod tests {
             page_width: 0.0,
             page_height: 0.0,
             text: "hello".into(),
+            markdown: String::new(),
             text_items: vec![],
             projected_lines: vec![],
             regions: crate::types::Region::default(),
@@ -234,5 +249,23 @@ mod tests {
         let out = format_markdown(&[a, b], &[], ImageMode::Placeholder);
         assert!(out.contains("-----"));
         assert!(out.find("A page.").unwrap() < out.find("B page.").unwrap());
+    }
+
+    #[test]
+    fn test_per_page_matches_joined_document() {
+        let a = page_with(1, vec![line("A page.", 50.0, 80.0, 10.0, 10.0)]);
+        let b = page_with(2, vec![line("B page.", 50.0, 80.0, 10.0, 10.0)]);
+        let pages = [a, b];
+        let per_page = format_markdown_pages(&pages, &[], ImageMode::Placeholder);
+        assert_eq!(per_page.len(), 2);
+        assert!(per_page[0].contains("A page."));
+        assert!(per_page[1].contains("B page."));
+        // The per-page strings carry no separator on their own; the document
+        // form is exactly the join.
+        assert!(!per_page[0].contains("-----"));
+        assert_eq!(
+            format_markdown(&pages, &[], ImageMode::Placeholder),
+            per_page.join("\n\n-----\n\n")
+        );
     }
 }

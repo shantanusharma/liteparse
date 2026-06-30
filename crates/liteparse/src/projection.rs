@@ -2862,6 +2862,7 @@ pub fn project_pages_to_grid(pages: Vec<Page>) -> Vec<ParsedPage> {
                 page_width: page.page_width,
                 page_height: page.page_height,
                 text,
+                markdown: String::new(),
                 text_items: projected_items
                     .into_iter()
                     .map(|proj| TextItem {

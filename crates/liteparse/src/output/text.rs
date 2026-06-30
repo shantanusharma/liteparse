@@ -19,6 +19,7 @@ mod tests {
             page_width: 0.0,
             page_height: 0.0,
             text: text.into(),
+            markdown: String::new(),
             text_items: vec![],
             projected_lines: vec![],
             regions: crate::types::Region::default(),

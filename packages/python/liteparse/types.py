@@ -41,6 +41,7 @@ class ParsedPage:
     width: float
     height: float
     text: str
+    markdown: str = ""
     text_items: List[TextItem] = field(default_factory=list)
 
 

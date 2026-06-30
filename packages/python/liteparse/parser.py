@@ -53,6 +53,7 @@ def _convert_native_result(native_result: Any) -> ParseResult:
                 width=native_page.width,
                 height=native_page.height,
                 text=native_page.text,
+                markdown=native_page.markdown,
                 text_items=text_items,
             )
         )
