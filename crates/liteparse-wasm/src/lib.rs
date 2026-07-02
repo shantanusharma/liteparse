@@ -275,8 +275,9 @@ impl OcrEngine for JsOcrEngine {
         options: &'b OcrOptions,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<Vec<CoreOcrResult>, Box<dyn std::error::Error + Send + Sync>>>
-                + '_,
+            dyn Future<
+                    Output = Result<Vec<CoreOcrResult>, Box<dyn std::error::Error + Send + Sync>>,
+                > + '_,
         >,
     > {
         // Copy bytes into a JS Uint8Array up-front (must happen on the
