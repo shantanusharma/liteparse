@@ -10,10 +10,13 @@ use super::hr::detect_horizontal_rules;
 use super::inline::{
     append_inline_continuation, line_uniform_style, render_line_inline, render_list_item_text,
 };
-use super::lists::{LIST_INDENT_STEP_PT, parse_list_marker};
+use super::lists::{
+    LIST_INDENT_STEP_PT, detect_ordered_list_lines, parse_list_marker,
+    split_ordered_marker_for_emit,
+};
 use super::paragraphs::{
-    ParaAccum, append_to_paragraph, collapse_whitespace, continues_heading, continues_paragraph,
-    ends_hyphenated, ends_sentence_final, is_soft_hyphen_break,
+    ParaAccum, append_to_paragraph, collapse_whitespace, continues_heading, continues_list_item,
+    continues_paragraph, ends_hyphenated, ends_sentence_final, is_soft_hyphen_break,
 };
 use super::repetition::is_header_or_footer;
 use super::tables::{detect_ruled_tables, detect_tables, merge_table_runs};
@@ -491,6 +494,18 @@ fn classify_region(
     let borderless_runs = precomputed_tables.unwrap_or_else(|| detect_tables(lines));
     let table_runs = merge_table_runs(ruled_runs, borderless_runs);
 
+    // Region-wide pre-pass: which line indices carry a lettered/roman marker
+    // (`a.`, `i.`) that belongs to a confirmed sequential list run. Only these
+    // are treated as list items below — a lone `A.` / initial is left alone.
+    // Lines already inside a detected table are excluded so enumerated table
+    // footnotes (`(a)`, `(b)` below a table) aren't pulled out as a list,
+    // which would disturb the table's row/track inference.
+    let table_covered: std::collections::HashSet<usize> = table_runs
+        .iter()
+        .flat_map(|run| run.start..run.end)
+        .collect();
+    let ordered_list_lines = detect_ordered_list_lines(lines, &table_covered);
+
     const TABLE_HR_SUPPRESS_HEADROOM_ROWS: f32 = 4.0;
     let table_y_extents: Vec<(f32, f32)> = table_runs
         .iter()
@@ -805,8 +820,20 @@ fn classify_region(
             }
         }
 
-        // List item?
-        if let Some((ordered, marker, rest)) = parse_list_marker(text) {
+        // List item? Bullets/decimals come from `parse_list_marker`; lettered
+        // and roman markers are only accepted when the region pre-pass
+        // confirmed them as part of a sequential run.
+        let list_marker: Option<(bool, String, String)> = parse_list_marker(text)
+            .map(|(o, m, r)| (o, m, r.to_string()))
+            .or_else(|| {
+                if ordered_list_lines.contains(&line_idx) {
+                    split_ordered_marker_for_emit(text).map(|(m, r)| (true, m, r))
+                } else {
+                    None
+                }
+            });
+        if let Some((ordered, marker, rest)) = list_marker {
+            let rest = rest.as_str();
             // Numbered bold-section heading: "1. **Foo**" / "5. **The dynamics**".
             // When the post-marker body is uniformly bold + body-sized,
             // standalone (paragraph-break gap above and below), short, and
@@ -859,12 +886,13 @@ fn classify_region(
             continue;
         }
 
-        // Continuation of a list item: same gap/font rules as paragraphs.
-        // Footnote-style continuations often left-flush below the marker's
-        // hanging indent, so we don't require indent ≥ marker indent.
+        // Continuation of a list item: same gap/font rules as paragraphs, but
+        // hanging-indent tolerant. Wrapped bodies either left-flush below the
+        // marker (footnote style) or align under the marker's text (indented
+        // right) — `continues_list_item` accepts both.
         if let Some(item_idx) = state.last_list_item_idx
             && let Some(prev_idx) = state.last_list_line
-            && continues_paragraph(&lines[prev_idx], line)
+            && continues_list_item(&lines[prev_idx], line)
             && let Some(Block::ListItem {
                 text: prev_text, ..
             }) = blocks.get_mut(item_idx)

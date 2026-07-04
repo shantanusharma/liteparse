@@ -164,6 +164,18 @@ pub(super) fn continues_heading(prev: &ProjectedLine, cur: &ProjectedLine) -> bo
 
 /// Decide whether `cur` continues the paragraph started by `prev`.
 pub(super) fn continues_paragraph(prev: &ProjectedLine, cur: &ProjectedLine) -> bool {
+    paragraph_flow(prev, cur, false)
+}
+
+/// List-item continuation: like `continues_paragraph`, but tolerant of a
+/// hanging indent. A wrapped list-item body commonly aligns under the marker's
+/// *text* — i.e. indented to the right of the marker line — which
+/// `continues_paragraph` would read as a new indented block.
+pub(super) fn continues_list_item(prev: &ProjectedLine, cur: &ProjectedLine) -> bool {
+    paragraph_flow(prev, cur, true)
+}
+
+fn paragraph_flow(prev: &ProjectedLine, cur: &ProjectedLine, allow_hanging_indent: bool) -> bool {
     // Anchor only signals a paragraph break when one of the lines is clearly
     // centered while the other isn't — justified prose routinely alternates
     // between Left / Right / Floating dominant anchors as line widths flex,
@@ -217,7 +229,10 @@ pub(super) fn continues_paragraph(prev: &ProjectedLine, cur: &ProjectedLine) -> 
             .is_some_and(|c| c.is_lowercase());
         return ends_open && starts_lower;
     }
-    if (prev.indent_x - cur.indent_x).abs() > INDENT_TOLERANCE && cur.anchor == Anchor::Left {
+    if !allow_hanging_indent
+        && (prev.indent_x - cur.indent_x).abs() > INDENT_TOLERANCE
+        && cur.anchor == Anchor::Left
+    {
         // Indent change on a left-aligned block usually means a new paragraph
         // (block-quote, list, indented passage, etc.). Allow first-line indent
         // by checking only when the *next* line shifts right relative to prev.

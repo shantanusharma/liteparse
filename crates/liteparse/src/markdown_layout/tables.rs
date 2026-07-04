@@ -1276,18 +1276,23 @@ fn is_bullet_only(text: &str) -> bool {
                 | '⮚'
                 | '►'
                 | '▶'
+                // Symbol-font bullet in the Private Use Area (undecoded 0xB7).
+                | '\u{f0b7}'
         )
     });
     if only_glyph {
         return true;
     }
-    // Numeric list marker: "1.", "1)", "(1)", "i.", "ii." etc. — all are list
-    // markers, not table labels.
+    // Numeric list marker: "1.", "1)", "(1)", "i.", "ii.", "a.", "(a)" etc. —
+    // all are list markers, not table labels.
     let chars: Vec<char> = t.chars().collect();
-    let is_paren_num = chars.first() == Some(&'(')
-        && chars.last() == Some(&')')
-        && chars[1..chars.len() - 1].iter().all(|c| c.is_ascii_digit());
-    if is_paren_num && chars.len() <= 5 {
+    // Paren-wrapped marker: "(1)" or single-letter "(a)".
+    let is_paren_marker = chars.first() == Some(&'(') && chars.last() == Some(&')') && {
+        let inner = &chars[1..chars.len() - 1];
+        inner.iter().all(|c| c.is_ascii_digit())
+            || (inner.len() == 1 && inner[0].is_ascii_alphabetic())
+    };
+    if is_paren_marker && chars.len() <= 5 {
         return true;
     }
     let trailing = chars.last().copied();
@@ -1297,7 +1302,12 @@ fn is_bullet_only(text: &str) -> bool {
             && (body.chars().all(|c| c.is_ascii_digit())
                 || body
                     .chars()
-                    .all(|c| matches!(c, 'i' | 'v' | 'x' | 'I' | 'V' | 'X')))
+                    .all(|c| matches!(c, 'i' | 'v' | 'x' | 'I' | 'V' | 'X'))
+                // Single-letter lettered-list marker: "a.", "b)", "A." — a
+                // short marker column beside wrapped body text is a nested
+                // ordered list, not a 2-column description table.
+                || (body.chars().count() == 1
+                    && body.chars().next().is_some_and(|c| c.is_ascii_alphabetic())))
         {
             return true;
         }
@@ -4343,5 +4353,59 @@ mod tests {
             }
             other => panic!("expected Block::Table, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn is_bullet_only_recognizes_lettered_markers() {
+        // Digit and roman markers were already handled; lettered ordered-list
+        // markers must be too, so a nested a./b./c. list is not mistaken for a
+        // description-list table label.
+        for m in ["a.", "b.", "c.", "z.", "A.", "a)", "B)", "(a)", "(B)"] {
+            assert!(is_bullet_only(m), "{m:?} should be a bullet/list marker");
+            assert!(
+                !is_label_like(m),
+                "{m:?} should not be treated as a table label"
+            );
+        }
+        // Genuine short labels stay labels.
+        for l in ["Name:", "Term", "Rate", "Fee.", "AB.", "ab."] {
+            assert!(!is_bullet_only(l), "{l:?} should not be a bullet marker");
+        }
+    }
+
+    #[test]
+    fn lettered_list_is_not_a_description_table() {
+        // Two-level lettered list: short marker column (col 0) beside wrapped
+        // body text (col 1). Regression for the nested-list → pipe-table bug.
+        let lines = vec![
+            line_with_spans(
+                &[
+                    ("a.", 80.0),
+                    ("The Committee may retain outside advisors.", 120.0),
+                ],
+                100.0,
+                10.0,
+            ),
+            line_with_spans(
+                &[
+                    ("b.", 80.0),
+                    ("The Committee shall have sole authority.", 120.0),
+                ],
+                88.0,
+                10.0,
+            ),
+            line_with_spans(
+                &[
+                    ("c.", 80.0),
+                    ("In retaining advice the Committee considers:", 120.0),
+                ],
+                76.0,
+                10.0,
+            ),
+        ];
+        assert!(
+            try_detect_description_list(&lines, 0).is_none(),
+            "lettered list must not be detected as a description-list table"
+        );
     }
 }
