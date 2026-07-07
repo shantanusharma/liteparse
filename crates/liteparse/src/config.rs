@@ -69,9 +69,7 @@ pub struct LiteParseConfig {
     /// also drops OCR-sourced text outside the region.
     pub crop_box: Option<CropBox>,
     /// Drop diagonal (skewed) text — items whose rotation is more than 2°
-    /// off the nearest right angle (0/90/180/270). Default `false`. Matches
-    /// the host worker's `skip_diagonal_text` behaviour so watermarks and
-    /// rotated stamps can be excluded from the fast-tier output.
+    /// off the nearest right angle (0/90/180/270). Default `false`.
     pub skip_diagonal_text: bool,
 }
 

@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_retry_matches_worker_parity() {
+    fn test_default_retry_matches() {
         let c = OcrRetryConfig::default();
         assert_eq!(c.max_attempts, 10);
         assert_eq!(c.base_backoff_ms, 1000);

@@ -1028,8 +1028,7 @@ fn dedup_overlapping_items(items: &mut Vec<TextItem>, debug: bool) {
 }
 
 /// True when `rotation` (degrees) is more than 2° off the nearest right angle
-/// (0/90/180/270). Mirrors the host worker's diagonal-text rule
-/// `|r - round(r / 90) * 90| > 2`, so a page's diagonal watermark/stamp text
+/// (0/90/180/270). A page's diagonal watermark/stamp text
 /// is classified identically on both sides.
 fn is_diagonal_rotation(rotation: f32) -> bool {
     let nearest_right_angle = (rotation / 90.0).round() * 90.0;
@@ -1041,8 +1040,7 @@ fn is_diagonal_rotation(rotation: f32) -> bool {
 ///
 /// * `skip_diagonal` drops skewed text (watermarks, rotated stamps).
 /// * `crop_box` keeps only items lying *entirely* inside the surviving page
-///   region — fractions cropped from each side, top-left origin, matching the
-///   host worker's bounding-box crop.
+///   region — fractions cropped from each side, top-left origin.
 ///
 /// Running here (after OCR merge, before projection) means both native and
 /// OCR-sourced items are filtered and removed text never reaches the output.
@@ -1977,7 +1975,7 @@ mod tests {
     }
 
     #[test]
-    fn is_diagonal_rotation_matches_worker_rule() {
+    fn is_diagonal_rotation_matches() {
         // Within 2° of a right angle → not diagonal.
         assert!(!is_diagonal_rotation(0.0));
         assert!(!is_diagonal_rotation(1.9));
