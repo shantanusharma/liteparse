@@ -1,5 +1,12 @@
 use file_format::FileFormat;
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
+use image::{DynamicImage, GenericImageView};
+use resvg::tiny_skia::Pixmap;
+use resvg::usvg::{Options, Tree};
+use std::io::Write;
 use tempfile::TempDir;
+use tokio::fs;
 
 use crate::error::LiteParseError;
 use std::{
@@ -23,9 +30,6 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 
 /// Plain-text extensions that cannot be rendered as page images.
 const TEXT_ONLY_EXTENSIONS: &[&str] = &["txt", "md", "markdown", "log"];
-
-/// Extensions that require Ghostscript for ImageMagick conversion.
-const GHOSTSCRIPT_REQUIRED_EXTENSIONS: &[&str] = &["svg", "eps", "ps", "ai"];
 
 /// A resolved external command with its executable path and any required prefix args.
 #[derive(Debug, Clone)]
@@ -316,48 +320,6 @@ pub async fn is_path_executable(file_path: &str) -> bool {
     }
 }
 
-/// Detect whether a resolved path points at the built-in Windows
-/// `System32\convert.exe` (which is unrelated to ImageMagick).
-fn is_windows_system_convert(file_path: &str) -> bool {
-    let normalized = file_path.replace('/', "\\").to_lowercase();
-    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-    let system32_convert = format!("{system_root}\\System32\\convert.exe")
-        .replace('/', "\\")
-        .to_lowercase();
-    normalized == system32_convert
-}
-
-/// Verify an executable identifies itself as ImageMagick via `-version`.
-async fn is_image_magick_binary(executable_path: &str, args: &[&str]) -> bool {
-    let mut full_args: Vec<&str> = args.to_vec();
-    full_args.push("-version");
-    match execute_command(executable_path, full_args, 5000).await {
-        Ok(out) => out.to_lowercase().contains("imagemagick"),
-        Err(_) => false,
-    }
-}
-
-async fn resolve_image_magick_command(command: &str) -> Option<ResolvedCommand> {
-    let resolved_path = resolve_command_path(command).await?;
-
-    if command == "convert"
-        && std::env::consts::FAMILY == "windows"
-        && is_windows_system_convert(&resolved_path)
-    {
-        return None;
-    }
-
-    if !is_image_magick_binary(&resolved_path, &[]).await {
-        return None;
-    }
-
-    Some(ResolvedCommand {
-        command: resolved_path.clone(),
-        args: Vec::new(),
-        resolved_path,
-    })
-}
-
 /// Find LibreOffice command - handles different installation methods.
 pub async fn find_libre_office_command() -> Option<String> {
     if is_command_available("libreoffice").await
@@ -390,14 +352,6 @@ pub async fn find_libre_office_command() -> Option<String> {
     }
 
     None
-}
-
-/// Find ImageMagick command - handles v6 (`convert`) and v7 (`magick`).
-pub async fn find_image_magick_command() -> Option<ResolvedCommand> {
-    if let Some(cmd) = resolve_image_magick_command("magick").await {
-        return Some(cmd);
-    }
-    resolve_image_magick_command("convert").await
 }
 
 /// Convert office documents using LibreOffice.
@@ -478,39 +432,175 @@ async fn find_pdf_in_dir(output_dir: &str) -> Result<String, LiteParseError> {
     ))
 }
 
-/// Convert images to PDF using ImageMagick.
+/// Separates RGB and alpha channels from raw RGBA8 bytes.
+/// Used by both the `image` crate path and the `resvg` SVG path.
+fn separate_rgb_and_alpha_from_rgba(rgba: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+    let mut alpha = Vec::with_capacity(rgba.len() / 4);
+
+    for px in rgba.chunks_exact(4) {
+        rgb.push(px[0]);
+        rgb.push(px[1]);
+        rgb.push(px[2]);
+        alpha.push(px[3]);
+    }
+
+    (rgb, alpha)
+}
+
+/// Separates the RGB and alpha channels of a raster image.
+fn separate_rgb_and_alpha(img: DynamicImage) -> (Vec<u8>, Vec<u8>) {
+    let rgba = img.to_rgba8();
+    separate_rgb_and_alpha_from_rgba(rgba.as_raw())
+}
+
+/// Rasterizes an SVG file to RGBA8 bytes + dimensions using resvg.
+fn rasterize_svg(data: &[u8]) -> Result<(Vec<u8>, u32, u32), LiteParseError> {
+    let opt = Options::default();
+    let tree = Tree::from_data(data, &opt)
+        .map_err(|e| LiteParseError::Conversion(format!("invalid svg: {e}")))?;
+
+    let size = tree.size();
+    let width = size.width().ceil() as u32;
+    let height = size.height().ceil() as u32;
+
+    let mut pixmap = Pixmap::new(width.max(1), height.max(1))
+        .ok_or_else(|| LiteParseError::Conversion("failed to allocate pixmap".to_string()))?;
+
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+
+    // tiny_skia's Pixmap stores premultiplied RGBA; un-premultiply so the
+    // PDF's separate RGB/SMask streams composite correctly.
+    let mut rgba = pixmap.data().to_vec();
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3];
+        if a != 0 && a != 255 {
+            px[0] = ((px[0] as u16 * 255) / a as u16) as u8;
+            px[1] = ((px[1] as u16 * 255) / a as u16) as u8;
+            px[2] = ((px[2] as u16 * 255) / a as u16) as u8;
+        }
+    }
+
+    Ok((rgba, width, height))
+}
+
 pub async fn convert_image_to_pdf(
     file_path: &str,
     output_dir: &str,
 ) -> Result<String, LiteParseError> {
-    let image_magick = find_image_magick_command().await.ok_or_else(|| {
-        LiteParseError::Conversion(
-            "ImageMagick is not installed. Please install ImageMagick to convert images. \
-             On macOS: brew install imagemagick, On Ubuntu: apt-get install imagemagick, \
-             On Windows: choco install imagemagick.app"
-                .into(),
-        )
-    })?;
+    let data = fs::read(file_path).await?;
 
-    let ext = Path::new(file_path)
+    let is_svg = Path::new(file_path)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    let needs_ghostscript = GHOSTSCRIPT_REQUIRED_EXTENSIONS.contains(&ext.as_str());
+        .map(|e| e.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false);
 
-    if needs_ghostscript {
-        let has_ghostscript =
-            is_command_available("gs").await || is_command_available_windows("gs").await;
-        if !has_ghostscript {
-            return Err(LiteParseError::Conversion(format!(
-                "Ghostscript is required to convert {} files but is not installed. \
-                 On macOS: brew install ghostscript, On Ubuntu: apt-get install ghostscript, \
-                 On Windows: choco install ghostscript",
-                ext.to_uppercase()
-            )));
-        }
-    }
+    let (width, height, rgb_img, mask_img) = if is_svg {
+        let (rgba, width, height) = rasterize_svg(&data)?;
+        let (rgb, mask) = separate_rgb_and_alpha_from_rgba(&rgba);
+        (width, height, rgb, mask)
+    } else {
+        let img = image::load_from_memory(&data)?;
+        let (width, height) = img.dimensions();
+        let (rgb, mask) = separate_rgb_and_alpha(img);
+        (width, height, rgb, mask)
+    };
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(&rgb_img)?;
+    let rgb_data = encoder.finish()?;
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(&mask_img)?;
+    let mask_data = encoder.finish()?;
+
+    let mut pdf_data = Vec::new();
+
+    writeln!(pdf_data, "%PDF-1.4")?;
+
+    let image_object_id = 2;
+    let image_object_pos = pdf_data.len();
+    writeln!(
+        pdf_data,
+        "{} 0 obj\n<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} /SMask {} 0 R >>",
+        image_object_id,
+        width,
+        height,
+        rgb_data.len(),
+        image_object_id + 1
+    )?;
+    writeln!(pdf_data, "stream")?;
+    pdf_data.extend(&rgb_data);
+    writeln!(pdf_data, "endstream\nendobj")?;
+
+    let mask_object_id = image_object_id + 1;
+    let mask_object_pos = pdf_data.len();
+    writeln!(
+        pdf_data,
+        "{} 0 obj\n<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>",
+        mask_object_id,
+        width,
+        height,
+        mask_data.len()
+    )?;
+    writeln!(pdf_data, "stream")?;
+    pdf_data.extend(&mask_data);
+    writeln!(pdf_data, "endstream\nendobj")?;
+
+    let content_stream_object_id = 5;
+    let content_stream_pos = pdf_data.len();
+    let content = format!(
+        "q\n{} 0 0 {} 0 0 cm\n/Im{} Do\nQ",
+        width, height, image_object_id
+    );
+    writeln!(
+        pdf_data,
+        "{} 0 obj\n<< /Length {} >>",
+        content_stream_object_id,
+        content.len()
+    )?;
+    writeln!(pdf_data, "stream\n{}\nendstream\nendobj", content)?;
+
+    let page_object_id = 4;
+    let page_object_pos = pdf_data.len();
+    writeln!(
+        pdf_data,
+        "{} 0 obj\n<< /Type /Page /Parent 1 0 R /MediaBox [0 0 {} {}] /Contents {} 0 R /Resources << /XObject << /Im{} {} 0 R >> >> >>",
+        page_object_id, width, height, content_stream_object_id, image_object_id, image_object_id
+    )?;
+    writeln!(pdf_data, "endobj")?;
+
+    let pages_object_pos = pdf_data.len();
+    writeln!(
+        pdf_data,
+        "1 0 obj\n<< /Type /Pages /Kids [ {} 0 R ] /Count 1 >>",
+        page_object_id
+    )?;
+    writeln!(pdf_data, "endobj")?;
+
+    let catalog_object_pos = pdf_data.len();
+    writeln!(pdf_data, "6 0 obj\n<< /Type /Catalog /Pages 1 0 R >>")?;
+    writeln!(pdf_data, "endobj")?;
+
+    let xref_start = pdf_data.len();
+    writeln!(pdf_data, "xref")?;
+    writeln!(pdf_data, "0 7")?;
+    writeln!(pdf_data, "0000000000 65535 f ")?;
+    writeln!(pdf_data, "{:010} 00000 n ", pages_object_pos)?;
+    writeln!(pdf_data, "{:010} 00000 n ", image_object_pos)?;
+    writeln!(pdf_data, "{:010} 00000 n ", mask_object_pos)?;
+    writeln!(pdf_data, "{:010} 00000 n ", page_object_pos)?;
+    writeln!(pdf_data, "{:010} 00000 n ", content_stream_pos)?;
+    writeln!(pdf_data, "{:010} 00000 n ", catalog_object_pos)?;
+
+    writeln!(pdf_data, "trailer\n<< /Size 7 /Root 6 0 R >>")?;
+    writeln!(pdf_data, "startxref\n{}", xref_start)?;
+    writeln!(pdf_data, "%%EOF")?;
 
     let base_name = Path::new(file_path)
         .file_stem()
@@ -521,36 +611,9 @@ pub async fn convert_image_to_pdf(
         .to_string_lossy()
         .to_string();
 
-    let mut args: Vec<&str> = image_magick.args.iter().map(|s| s.as_str()).collect();
-    args.push(file_path);
-    args.push("-density");
-    args.push("150");
-    args.push("-units");
-    args.push("PixelsPerInch");
-    args.push(&pdf_path);
+    fs::write(&pdf_path, pdf_data).await?;
 
-    match execute_command(&image_magick.command, args, 60_000).await {
-        Ok(_) => Ok(pdf_path),
-        Err(error) => {
-            let error_msg = error.to_string();
-            if error_msg.contains("gs") && error_msg.contains("command not found") {
-                return Err(LiteParseError::Conversion(format!(
-                    "Ghostscript is required to convert {} files but is not installed. \
-                     On macOS: brew install ghostscript, On Ubuntu: apt-get install ghostscript, \
-                     On Windows: choco install ghostscript",
-                    ext.to_uppercase()
-                )));
-            }
-            if error_msg.contains("FailedToExecuteCommand") && error_msg.contains("gs") {
-                return Err(LiteParseError::Conversion(format!(
-                    "Ghostscript failed during {} conversion. \
-                     Ensure Ghostscript is properly installed: brew install ghostscript",
-                    ext.to_uppercase()
-                )));
-            }
-            Err(error)
-        }
-    }
+    Ok(pdf_path)
 }
 
 pub fn guess_extension_from_data(data: &[u8]) -> Option<String> {
@@ -703,19 +766,6 @@ mod tests {
     fn test_get_resolved_path_from_output_empty() {
         assert!(get_resolved_path_from_output("", false).is_none());
         assert!(get_resolved_path_from_output("   \n  \n", true).is_none());
-    }
-
-    #[test]
-    fn test_is_windows_system_convert() {
-        // SAFETY: tests run single-threaded for env modification scope
-        unsafe { std::env::set_var("SystemRoot", "C:\\Windows") };
-        assert!(is_windows_system_convert(
-            "C:\\Windows\\System32\\convert.exe"
-        ));
-        assert!(is_windows_system_convert("C:/Windows/System32/convert.exe"));
-        assert!(!is_windows_system_convert(
-            "C:\\Program Files\\ImageMagick\\convert.exe"
-        ));
     }
 
     #[test]
