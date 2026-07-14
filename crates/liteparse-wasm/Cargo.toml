@@ -20,6 +20,14 @@ serde-wasm-bindgen = "0.6"
 tsify-next = { version = "0.5", default-features = false, features = ["js"] }
 console_error_panic_hook = { version = "0.1", optional = true }
 
+# Direct dependency purely so this crate's build script receives
+# DEP_PDFIUM_LIB_PATH (pdfium-sys sets `links = "pdfium"`). build.rs uses it to
+# detect whether pdfium ships a standalone libsetjmp.a and, if so, drop the
+# fallback setjmp/longjmp stubs in wasi_stubs.rs. Only the wasm target links
+# pdfium statically, so scope it there.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pdfium-sys = { package = "liteparse-pdfium-sys", version = "1.3.0", path = "../pdfium-sys" }
+
 [features]
 default = ["panic_hook"]
 panic_hook = ["dep:console_error_panic_hook"]
