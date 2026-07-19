@@ -549,7 +549,7 @@ fn form_lines(
     let merge_h_tolerance = 0.1;
 
     let mut merged_items: Vec<ProjectedTextItem> = Vec::with_capacity(items.len());
-    for cur in items.drain(..) {
+    for mut cur in items.drain(..) {
         let should_merge = merged_items
             .last()
             .map(|prev| can_merge(prev, &cur, merge_y_tolerance, merge_h_tolerance))
@@ -559,6 +559,7 @@ fn form_lines(
             if let Some(prev) = merged_items.last_mut() {
                 let merged = merge_bbox(prev, &cur);
                 prev.item.text.push_str(&cur.item.text);
+                prev.item.words.append(&mut cur.item.words);
                 prev.item.x = merged.0;
                 prev.item.y = merged.1;
                 prev.item.width = merged.2;
@@ -725,7 +726,7 @@ fn form_lines(
 
     for line in lines.iter_mut() {
         let mut merged_line: Vec<ProjectedTextItem> = Vec::with_capacity(line.len());
-        for item in line.drain(..) {
+        for mut item in line.drain(..) {
             if let Some(prev) = merged_line.last_mut() {
                 let both_are_numbers = looks_like_table_number(&prev.item.text)
                     && looks_like_table_number(&item.item.text);
@@ -760,6 +761,7 @@ fn form_lines(
                 if is_decimal_continuation {
                     prev.item.width = item.item.x + item.item.width - prev.item.x;
                     prev.item.text.push_str(&item.item.text);
+                    prev.item.words.append(&mut item.item.words);
                     merge_orig_bbox(prev, &item);
                     continue;
                 }
@@ -793,6 +795,7 @@ fn form_lines(
                 {
                     prev.item.width = item.item.x + item.item.width - prev.item.x;
                     prev.item.text.push_str(&item.item.text);
+                    prev.item.words.append(&mut item.item.words);
                     merge_orig_bbox(prev, &item);
                     continue;
                 }
@@ -805,6 +808,7 @@ fn form_lines(
                         prev.item.text.push(' ');
                     }
                     prev.item.text.push_str(&item.item.text);
+                    prev.item.words.append(&mut item.item.words);
                     merge_orig_bbox(prev, &item);
                     continue;
                 }
@@ -5351,6 +5355,64 @@ mod tests {
         assert!((item.y - y).abs() < 0.001);
         assert!((item.width - 22.0).abs() < 0.001);
         assert!((item.height - 8.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn project_pages_to_grid_concatenates_word_boxes_when_items_merge() {
+        // Regression for #361: two items that merge into one must carry both
+        // items' per-word sub-boxes. The item text was concatenated but the
+        // second item's `words` were silently dropped, truncating `words`.
+        let y = 50.25;
+        let pages = vec![Page {
+            page_number: 1,
+            page_width: 612.0,
+            page_height: 792.0,
+            text_items: vec![
+                TextItem {
+                    text: "A".to_string(),
+                    x: 10.0,
+                    y,
+                    width: 10.0,
+                    height: 8.0,
+                    words: vec![WordBox {
+                        text: "A".to_string(),
+                        x: 10.0,
+                        y,
+                        width: 10.0,
+                        height: 8.0,
+                    }],
+                    ..Default::default()
+                },
+                TextItem {
+                    text: "B".to_string(),
+                    x: 24.0,
+                    y: y + 0.01,
+                    width: 8.0,
+                    height: 7.5,
+                    words: vec![WordBox {
+                        text: "B".to_string(),
+                        x: 24.0,
+                        y: y + 0.01,
+                        width: 8.0,
+                        height: 7.5,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            graphics: Vec::new(),
+            struct_nodes: Vec::new(),
+            image_refs: Vec::new(),
+        }];
+
+        let parsed = project_pages_to_grid(pages);
+        let item = parsed[0]
+            .text_items
+            .iter()
+            .find(|item| item.text == "A B")
+            .expect("merged text item");
+
+        let word_texts: Vec<&str> = item.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(word_texts, vec!["A", "B"]);
     }
 
     #[test]

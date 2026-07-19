@@ -646,8 +646,8 @@ fn extract_page_text_items(
             continue;
         }
 
-        // Spaces: mark that we're in a pending-space state.
-        if c == ' ' {
+        // Spaces: mark that we're in a pending-space state
+        if c.is_whitespace() {
             seg.mark_pending_space();
             continue;
         }
