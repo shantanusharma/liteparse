@@ -655,7 +655,7 @@ impl LiteParse {
 /// Duck-typed input for [`search_items`]. Extracts by attribute name, so it
 /// accepts both the native `PyTextItem` and the pure-Python `TextItem`
 /// dataclass that `LiteParse.parse()` hands back (see `parser.py`,
-/// `_convert_native_result`). 
+/// `_convert_native_result`).
 #[derive(FromPyObject)]
 struct SearchInputItem {
     text: String,
