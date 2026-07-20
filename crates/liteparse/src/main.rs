@@ -271,6 +271,22 @@ fn parse_output_format(s: &str) -> Result<OutputFormat, String> {
 }
 
 /// Parse a `Name: Value` header string into a `(name, value)` pair.
+/// Read all bytes from stdin, used when the input path is `-` (e.g. a piped
+/// document: `curl -sL … | lit parse -`). Errors carry a hint so a common
+/// mistake — passing `-` with nothing piped — is diagnosable.
+fn read_stdin_bytes() -> Result<Vec<u8>, std::io::Error> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::io::stdin().lock().read_to_end(&mut bytes)?;
+    if bytes.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "no data on stdin (input `-` expects a document piped in, e.g. `curl … | lit parse -`)",
+        ));
+    }
+    Ok(bytes)
+}
+
 fn parse_header(s: &str) -> Result<(String, String), String> {
     let (name, value) = s
         .split_once(':')
@@ -327,7 +343,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let lp = LiteParse::new(config);
-            let result = lp.parse(&cmd.file).await?;
+            let result = if cmd.file == "-" {
+                lp.parse_input(PdfInput::Bytes(read_stdin_bytes()?)).await?
+            } else {
+                lp.parse(&cmd.file).await?
+            };
             let formatted = match lp.config().output_format {
                 OutputFormat::Json => json::format_json(&result.pages)?,
                 OutputFormat::Text => text::format_text(&result.pages),
@@ -524,7 +544,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..Default::default()
             };
             let lp = LiteParse::new(config);
-            let is_complex = lp.is_complex(PdfInput::Path(cmd.file)).await?;
+            let input = if cmd.file == "-" {
+                PdfInput::Bytes(read_stdin_bytes()?)
+            } else {
+                PdfInput::Path(cmd.file)
+            };
+            let is_complex = lp.is_complex(input).await?;
 
             let complex_pages = is_complex.iter().filter(|c| c.needs_ocr).count();
 

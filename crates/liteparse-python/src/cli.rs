@@ -3,6 +3,7 @@ use liteparse::config::{ImageMode, LiteParseConfig, OutputFormat};
 use liteparse::conversion;
 use liteparse::output::{json, text};
 use liteparse::parser::LiteParse;
+use liteparse::types::PdfInput;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -23,6 +24,8 @@ enum Commands {
     Screenshot(ScreenshotCommand),
     /// Parse multiple documents in batch mode
     BatchParse(BatchParseCommand),
+    /// Check if a document is 'complex' enough to require OCR or advanced parsing
+    IsComplex(IsComplexCommand),
 }
 
 #[derive(Args, Debug)]
@@ -87,6 +90,24 @@ struct ScreenshotCommand {
     target_pages: Option<String>,
     #[arg(long, default_value = "150")]
     dpi: f32,
+    #[arg(long)]
+    password: Option<String>,
+    #[arg(short, long)]
+    quiet: bool,
+}
+
+#[derive(Args, Debug)]
+struct IsComplexCommand {
+    /// Input file path (or `-` to read the document from stdin)
+    file: String,
+    /// Emit dense, whitespace-free JSON instead of pretty-printed (still valid
+    /// for `jq` and friends).
+    #[arg(long)]
+    compact: bool,
+    #[arg(long, default_value = "1000")]
+    max_pages: usize,
+    #[arg(long)]
+    target_pages: Option<String>,
     #[arg(long)]
     password: Option<String>,
     #[arg(short, long)]
@@ -167,6 +188,21 @@ fn parse_image_mode(s: &str) -> Result<ImageMode, String> {
     }
 }
 
+/// Read all bytes from stdin, used when the input path is `-` (e.g. a piped
+/// document: `curl -sL … | lit parse -`).
+fn read_stdin_bytes() -> Result<Vec<u8>, std::io::Error> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::io::stdin().lock().read_to_end(&mut bytes)?;
+    if bytes.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "no data on stdin (input `-` expects a document piped in, e.g. `curl … | lit parse -`)",
+        ));
+    }
+    Ok(bytes)
+}
+
 /// Run the CLI with the given args (typically from sys.argv).
 pub fn run_cli(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse_from(args);
@@ -198,7 +234,11 @@ pub fn run_cli(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 config.num_workers = n;
             }
             let lp = LiteParse::new(config);
-            let result = rt.block_on(lp.parse(&cmd.file))?;
+            let result = if cmd.file == "-" {
+                rt.block_on(lp.parse_input(PdfInput::Bytes(read_stdin_bytes()?)))?
+            } else {
+                rt.block_on(lp.parse(&cmd.file))?
+            };
             let formatted = match lp.config().output_format {
                 OutputFormat::Json => json::format_json(&result.pages)?,
                 OutputFormat::Text => text::format_text(&result.pages),
@@ -366,6 +406,57 @@ pub fn run_cli(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 success, errors
             );
             if errors > 0 {
+                std::process::exit(1);
+            }
+        }
+        Commands::IsComplex(cmd) => {
+            let config = LiteParseConfig {
+                max_pages: cmd.max_pages,
+                target_pages: cmd.target_pages,
+                password: cmd.password,
+                quiet: cmd.quiet,
+                ..Default::default()
+            };
+            let lp = LiteParse::new(config);
+            let input = if cmd.file == "-" {
+                PdfInput::Bytes(read_stdin_bytes()?)
+            } else {
+                PdfInput::Path(cmd.file)
+            };
+            let is_complex = rt.block_on(lp.is_complex(input))?;
+
+            let complex_pages = is_complex.iter().filter(|c| c.needs_ocr).count();
+
+            // Always emit JSON on stdout so the command composes with `jq` and
+            // friends without a flag. Pretty by default for human readability;
+            // `--compact` drops the whitespace. Both parse identically.
+            let json = if cmd.compact {
+                serde_json::to_string(&is_complex)?
+            } else {
+                serde_json::to_string_pretty(&is_complex)?
+            };
+            println!("{}", json);
+
+            // The human-readable verdict goes to stderr so it never pollutes the
+            // JSON on stdout. The exit code below carries the same signal for
+            // scripts that don't want to read either stream.
+            if !cmd.quiet {
+                let verdict = if complex_pages > 0 {
+                    "COMPLEX"
+                } else {
+                    "SIMPLE"
+                };
+                eprintln!(
+                    "{} — {}/{} page(s) need OCR",
+                    verdict,
+                    complex_pages,
+                    is_complex.len()
+                );
+            }
+
+            // Exit non-zero when any page needs OCR, so the command is usable as
+            // a shell predicate: exit 0 (simple) → `&& parse --no-ocr` is safe.
+            if complex_pages > 0 {
                 std::process::exit(1);
             }
         }

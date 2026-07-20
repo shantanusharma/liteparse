@@ -73,6 +73,12 @@ export interface JsLiteParseConfig {
    * false. Use to exclude rotated watermarks/stamps from the output.
    */
   skipDiagonalText?: boolean
+  /**
+   * Compute per-page complexity signals during parse and attach them to each
+   * page as `ParsedPage.complexity` (the same signals `isComplex` returns).
+   * Default false; enabling it runs an extra vector-text detection pass.
+   */
+  includeComplexity?: boolean
 }
 /**
  * A page sub-region as the fraction cropped from each side (top-left origin,
@@ -159,6 +165,7 @@ export interface JsParsedPage {
   text: string
   markdown: string
   textItems: Array<JsTextItem>
+  complexity?: JsPageComplexityStats
 }
 export interface JsParseResult {
   pages: Array<JsParsedPage>
